@@ -6,9 +6,9 @@ A freshly initialised agent has the same shapes.)
 
 import torch
 
-from drqn_agent import RainbowAgent
+from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
-from training_config import HISTORY_EMBEDDING_SIZE
+from settings.training_config import HISTORY_EMBEDDING_SIZE
 
 
 def test_dashboard_tensors(cpu, tiny_network, config_override):

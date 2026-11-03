@@ -9,7 +9,7 @@ Provides specialized endgame training scenarios:
 
 import random
 from typing import List, Tuple, Optional
-from piece import PieceType
+from environment.piece import PieceType
 
 
 class ScenarioDrill:

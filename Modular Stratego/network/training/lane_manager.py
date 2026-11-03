@@ -8,7 +8,7 @@ import random
 import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 
-from distributional_reward import create_unified_reward_shaper, StrategoRewardConfig
+from network.distributional_reward import create_unified_reward_shaper, StrategoRewardConfig
 
 
 class LaneManager:

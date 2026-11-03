@@ -9,7 +9,7 @@ import random
 import pytest
 import torch
 
-from drqn_agent import RainbowAgent
+from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
 
 NUM_ACTIONS = 3600

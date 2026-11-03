@@ -1,25 +1,26 @@
 """Step 7: curriculum (start, evaluation gates, caps, PFSP) and the scripted opponents' rank tables."""
 
+import importlib
 import random
 from collections import Counter
 
 import pytest
 import torch
 
-from piece import PieceType as P
+from environment.piece import PieceType as P
 
 HIDDEN = -20
 
 
 def _curriculum(tmp_path, phase=1):
-    from curriculum import CurriculumManager
+    from environment.curriculum import CurriculumManager
     return CurriculumManager(start_phase=phase, save_dir=str(tmp_path))
 
 
 # ---------------------------------------------------------------- start and advancement
 
 def test_training_starts_at_phase_one():
-    from training_config import CURRICULUM_START_PHASE
+    from settings.training_config import CURRICULUM_START_PHASE
     assert CURRICULUM_START_PHASE == 1
 
 
@@ -42,7 +43,7 @@ def test_training_games_alone_never_advance_a_phase(tmp_path):
 
 
 def test_every_phase_is_reachable_by_evaluation(tmp_path):
-    from curriculum import TrainingPhase
+    from environment.curriculum import TrainingPhase
     c = _curriculum(tmp_path)
     for phase in (1, 2, 3):
         assert c.current_phase == phase
@@ -85,7 +86,7 @@ def test_phase_one_trains_against_the_gate_opponents_from_the_start(tmp_path):
 
 def test_opponents_are_sampled_by_their_pfsp_weights(tmp_path, monkeypatch):
     """The thesis trainer cycled through the sorted opponent types in fixed blocks."""
-    from curriculum import CurriculumManager
+    from environment.curriculum import CurriculumManager
     c = _curriculum(tmp_path)
     monkeypatch.setattr(CurriculumManager, 'get_opponent_distribution',
                         lambda self: {'random': 0.9, 'smart_heuristic': 0.1})
@@ -112,7 +113,7 @@ def test_pfsp_weights_follow_the_recent_win_rate(tmp_path):
 # ---------------------------------------------------------------- battle rules and rank tables
 
 def test_battle_from_values_matches_the_environment_rules():
-    from battle import BattleResolver, battle_from_values
+    from environment.battle import BattleResolver, battle_from_values
     resolver = BattleResolver()
     for attacker in P:
         for defender in P:
@@ -123,7 +124,7 @@ def test_battle_from_values_matches_the_environment_rules():
 
 
 def test_is_enemy_value():
-    from battle import is_enemy_value
+    from environment.battle import is_enemy_value
     assert is_enemy_value(-5, 1) and is_enemy_value(5, -1)
     assert is_enemy_value(HIDDEN, 1) and is_enemy_value(HIDDEN, -1)  # the marker on either side's view
     assert not is_enemy_value(-13, 1) and not is_enemy_value(0, 1) and not is_enemy_value(5, 1)
@@ -143,11 +144,11 @@ def _scores(opponent, attacker, defender, score):
 
 
 SCORERS = {
-    'heuristic': (lambda: __import__('curriculum').HeuristicOpponent('cpu', -1),
+    'heuristic': (lambda: importlib.import_module('environment.curriculum').HeuristicOpponent('cpu', -1),
                   lambda o, m, b: o._score_move(m, b, -1)),
-    'smart_heuristic': (lambda: __import__('curriculum').SmartHeuristicOpponent('cpu', -1),
+    'smart_heuristic': (lambda: importlib.import_module('environment.curriculum').SmartHeuristicOpponent('cpu', -1),
                         lambda o, m, b: o._score_move(m, b, [m], -1)),
-    'greedy': (lambda: __import__('opponents').GreedyAgent(player_id=-1),
+    'greedy': (lambda: importlib.import_module('network.opponents').GreedyAgent(player_id=-1),
                lambda o, m, b: o._score_move(m, b, -1)),
 }
 
@@ -191,20 +192,20 @@ def test_cheap_pieces_probe_hidden_pieces_and_the_spy_does_not(name):
 
 
 def test_later_phases_are_gated_on_the_stronger_scripted_opponent():
-    from curriculum import phase_gates, TrainingPhase
+    from environment.curriculum import phase_gates, TrainingPhase
     assert set(phase_gates(TrainingPhase.MEMORY_GAP)) == {'heuristic'}
     assert set(phase_gates(TrainingPhase.SELF_PLAY)) == {'heuristic'}
 
 
 def test_smart_heuristic_values_its_own_pieces_by_type():
-    from curriculum import SmartHeuristicOpponent
+    from environment.curriculum import SmartHeuristicOpponent
     values = SmartHeuristicOpponent('cpu', -1).piece_values
     assert values[P.MARSHAL.value] == 100 and values[P.GENERAL.value] == 80 and values[P.FLAG.value] == 200
     assert values[P.BOMB.value] == 0
 
 
 def test_smart_heuristic_does_not_take_lakes_for_enemies():
-    from curriculum import SmartHeuristicOpponent
+    from environment.curriculum import SmartHeuristicOpponent
     board = _board({(3, 2): P.CAPTAIN.value, (4, 2): -13, (2, 2): -P.SCOUT.value})
     assert SmartHeuristicOpponent('cpu', 1)._check_adjacent_enemies(3, 2, board, 1) == 1
 
@@ -212,8 +213,8 @@ def test_smart_heuristic_does_not_take_lakes_for_enemies():
 # ---------------------------------------------------------------- evaluation games
 
 def test_evaluation_games_are_counted_and_greedy(cpu, tiny_network):
-    from drqn_agent import RainbowAgent
-    from curriculum import TrueRandomOpponent
+    from network.drqn_agent import RainbowAgent
+    from environment.curriculum import TrueRandomOpponent
     from network.training.evaluation import play_evaluation_games
     agent = RainbowAgent(player_id=1, device=cpu, num_envs=1)
     seen = []
@@ -236,7 +237,7 @@ def test_evaluation_games_are_counted_and_greedy(cpu, tiny_network):
 def test_trainer_evaluates_and_moves_through_the_phases(tmp_path, config_override, monkeypatch):
     """With tiny caps the run must leave Phase 1 (the thesis config started at Phase 4)."""
     import json
-    from test_trainer_smoke import run_tiny_training
+    from .test_trainer_smoke import run_tiny_training
     from environment import CurriculumManager  # the class the trainer uses
     evaluations = []
     original = CurriculumManager.record_evaluation
@@ -256,7 +257,7 @@ def test_trainer_evaluates_and_moves_through_the_phases(tmp_path, config_overrid
 def test_self_play_does_not_overwrite_the_learning_agent2(tmp_path, config_override, monkeypatch):
     """Phase 4: the thesis trainer loaded agent1's weights (or a league checkpoint) into agent2,
     the second learner, every time it was picked as the opponent."""
-    from test_trainer_smoke import run_tiny_training
+    from .test_trainer_smoke import run_tiny_training
     from network import RainbowAgent
     from environment import CurriculumManager  # the class the trainer uses
     monkeypatch.setattr(CurriculumManager, 'get_opponent_distribution', lambda self: {'self': 0.5, 'league': 0.5})
@@ -285,7 +286,7 @@ def test_self_play_does_not_overwrite_the_learning_agent2(tmp_path, config_overr
 def test_agent2_and_the_snapshot_read_aaren_history_from_phase_one(tmp_path, config_override, monkeypatch):
     """With AAREN on, agent2 got no history before Phase 4 although its network reads the AAREN
     planes (and agent1's weights, which expect them, were loaded into it)."""
-    from test_trainer_smoke import run_tiny_training
+    from .test_trainer_smoke import run_tiny_training
     from network import RainbowAgent
     agents = []
     original_init = RainbowAgent.__init__

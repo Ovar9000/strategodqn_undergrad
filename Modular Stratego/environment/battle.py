@@ -1,6 +1,6 @@
 from typing import Optional
 
-from piece import PieceType, SPECIAL_BATTLES, PIECE_RANKS
+from environment.piece import PieceType, SPECIAL_BATTLES, PIECE_RANKS
 
 HIDDEN_VALUE = -20  # board.HIDDEN_PIECE: an enemy piece whose rank the viewer cannot see
 LAKE_VALUE = -13    # board.LAKE_SQUARE

@@ -9,9 +9,9 @@ import os
 import pytest
 import torch
 
-from drqn_agent import RainbowAgent
-from training import Checkpointer, MetricsTracker
-from league import LeagueManager
+from network.drqn_agent import RainbowAgent
+from network.training import Checkpointer, MetricsTracker
+from environment.league import LeagueManager
 
 
 def _agent(cpu, player_id=1):

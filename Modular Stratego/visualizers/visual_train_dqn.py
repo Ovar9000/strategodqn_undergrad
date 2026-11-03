@@ -27,21 +27,18 @@ import random
 import time
 from collections import deque
 
-# Add parent directory
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from drqn_agent import RainbowAgent
+from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
-from game_state import GameState
-from piece import PieceType, PIECE_RANKS, PIECE_NAMES
-from board import LAKE_SQUARE
-from training_config import *
-from opponents import RandomAgent, OpponentPool, RandomSetupAgent, GreedyAgent
-from heuristic_setup import HeuristicSetupAgent
-from league import LeagueManager
-from distributional_reward import StrategoRewardConfig
-from policy_search import PolicyRefinedSearch, SearchConfig
-from curriculum import CurriculumManager
+from environment.game_state import GameState
+from environment.piece import PieceType, PIECE_RANKS, PIECE_NAMES
+from environment.board import LAKE_SQUARE
+from settings.training_config import *
+from network.opponents import RandomAgent, OpponentPool, RandomSetupAgent, GreedyAgent
+from environment.heuristic_setup import HeuristicSetupAgent
+from environment.league import LeagueManager
+from network.distributional_reward import StrategoRewardConfig
+from utils.policy_search import PolicyRefinedSearch, SearchConfig
+from environment.curriculum import CurriculumManager
 
 # Helper to capture gradients
 class GradientCatcher:

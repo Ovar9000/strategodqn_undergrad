@@ -16,14 +16,14 @@ from typing import Dict, Tuple, Optional, List, Any
 from dataclasses import dataclass, asdict
 from enum import IntEnum
 
-import training_config
-from training_config import (
+from settings import training_config
+from settings.training_config import (
     PHASE_MAX_TURNS, DEFAULT_MAX_TURNS,
     PHASE_1_WIN_THRESHOLD_RANDOM, PHASE_1_WIN_THRESHOLD_HEURISTIC,
     PHASE_2_WIN_THRESHOLD, PHASE_3_WIN_THRESHOLD
 )
-from battle import battle_from_values, is_enemy_value
-from piece import PieceType
+from environment.battle import battle_from_values, is_enemy_value
+from environment.piece import PieceType
 
 # Training games per opponent that PFSP looks back over
 PFSP_WINDOW = 100

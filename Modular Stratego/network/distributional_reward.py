@@ -21,10 +21,10 @@ import torch
 from collections import deque
 from typing import Tuple, Optional, Dict, Any, List
 from dataclasses import dataclass
-from piece import PieceType
-from game_state import GameState
-from board import HIDDEN_PIECE
-from training_config import GAMMA
+from environment.piece import PieceType
+from environment.game_state import GameState
+from environment.board import HIDDEN_PIECE
+from settings.training_config import GAMMA
 
 # Piece rank values for reward calculations (1-10 scale)
 PIECE_RANKS = {
@@ -135,7 +135,7 @@ class StrategoRewardConfig:
     def from_training_config(cls):
         """Creates a configuration instance from training_config.py constants."""
         try:
-            import training_config
+            from settings import training_config
             config = cls()
             return config
         except ImportError:

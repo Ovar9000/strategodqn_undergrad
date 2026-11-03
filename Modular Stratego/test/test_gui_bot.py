@@ -12,12 +12,11 @@ import torch
 
 GUI = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                    'Python Stratego Game')
-sys.path.insert(0, GUI)
 
 import dqn_bot_logic as D  # noqa: E402
 import stratego as S  # noqa: E402
-from piece import PieceType  # noqa: E402
-from board import HIDDEN_PIECE  # noqa: E402
+from environment.piece import PieceType  # noqa: E402
+from environment.board import HIDDEN_PIECE  # noqa: E402
 
 ARMY = {PieceType.MARSHAL: 1, PieceType.GENERAL: 1, PieceType.COLONEL: 2, PieceType.MAJOR: 3,
         PieceType.CAPTAIN: 4, PieceType.LIEUTENANT: 4, PieceType.SERGEANT: 4, PieceType.MINER: 5,

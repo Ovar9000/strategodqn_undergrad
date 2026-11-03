@@ -9,10 +9,10 @@ Plane layout (environment/observation.py):
 
 import torch
 
-from board import HIDDEN_PIECE, LAKE_SQUARE
-from drqn_agent import RainbowAgent
+from environment.board import HIDDEN_PIECE, LAKE_SQUARE
+from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
-from piece import PieceType
+from environment.piece import PieceType
 
 NUM_PLANES = 30
 OWN, ENEMY_KNOWN, ENEMY_HIDDEN, LAKE, OWN_REVEALED, OBSERVABILITY, NO_BATTLE, PROGRESS = 0, 12, 24, 25, 26, 27, 28, 29

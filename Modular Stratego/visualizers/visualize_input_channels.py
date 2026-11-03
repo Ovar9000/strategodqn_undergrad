@@ -19,12 +19,9 @@ import numpy as np
 import os
 import sys
 
-# Add parent directory for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from environment import StrategoEnvironment
-from drqn_agent import RainbowAgent
-from piece import PieceType
+from network.drqn_agent import RainbowAgent
+from environment.piece import PieceType
 
 # Channel names for visualization
 CHANNEL_NAMES = [

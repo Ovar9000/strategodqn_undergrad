@@ -1,7 +1,7 @@
 """
 Export a trained agent's Q-network to ONNX for the browser player (web/play.html).
 
-    python tools/export_onnx.py <checkpoint> [out.onnx]
+    python -m tools.export_onnx <checkpoint> [out.onnx]      (from Modular Stratego/)
 
 <checkpoint> is a RainbowAgent save: a .pth from save_model, an agent1_league_episode_*.pt, or a
 checkpoint .tar.gz from the Checkpointer. The ONNX model takes the observation planes
@@ -15,17 +15,10 @@ import json
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-for sub in ('', 'environment', 'network', 'settings', 'test', 'visualizers', 'utils'):
-    p = os.path.join(ROOT, sub)
-    if p not in sys.path:
-        sys.path.insert(0, p)
+import torch
 
-import torch  # noqa: E402
-
-from network import RainbowAgent  # noqa: E402
-from network.training import Checkpointer  # noqa: E402
+from network import RainbowAgent
+from network.training import Checkpointer
 
 
 class ExpectedQ(torch.nn.Module):

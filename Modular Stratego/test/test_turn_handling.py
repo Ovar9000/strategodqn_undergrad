@@ -6,8 +6,8 @@ import pytest
 import torch
 
 from environment import StrategoEnvironment
-from test_trainer_smoke import run_tiny_training
-from training_config import DRAW_REWARD
+from .test_trainer_smoke import run_tiny_training
+from settings.training_config import DRAW_REWARD
 
 
 # ---------------------------------------------------------------- environment
@@ -27,7 +27,7 @@ def _record_moves(monkeypatch, record):
     """Wrap every agent's act_batch: record (side the agent plays, side to move, owner of the moved piece)."""
     from network import RainbowAgent
     from network.opponents import RandomAgent
-    from curriculum import TrueRandomOpponent, HeuristicOpponent, SmartHeuristicOpponent
+    from environment.curriculum import TrueRandomOpponent, HeuristicOpponent, SmartHeuristicOpponent
 
     for cls in (RainbowAgent, RandomAgent, TrueRandomOpponent, HeuristicOpponent, SmartHeuristicOpponent):
         original = cls.act_batch
@@ -71,7 +71,7 @@ def test_both_sides_start_games(tmp_path, config_override, monkeypatch):
 
 def test_stored_transitions_hold_the_agents_own_view_and_one_terminal_per_game(tmp_path, config_override, monkeypatch):
     from network import RainbowAgent, outcome_reward
-    from distributional_reward import compute_potential
+    from network.distributional_reward import compute_potential
     stored = []
     original = RainbowAgent.remember_batch
 
@@ -157,7 +157,7 @@ def test_lanes_do_not_mix():
 # ---------------------------------------------------------------- n-step buffer and lane keying
 
 def test_n_step_buffer_keeps_the_episode_tail():
-    from prioritized_memory import NStepBuffer
+    from network.prioritized_memory import NStepBuffer
     buf = NStepBuffer(n_steps=3, gamma=0.5)
     out = []
     for t in range(5):
@@ -172,7 +172,7 @@ def test_n_step_buffer_keeps_the_episode_tail():
 
 
 def test_remember_batch_uses_the_lanes_n_step_buffer(cpu, tiny_network):
-    from drqn_agent import RainbowAgent
+    from network.drqn_agent import RainbowAgent
     from environment import StrategoEnvironment
     agent = RainbowAgent(player_id=1, device=cpu, num_envs=3, buffer_size=100)
     gs = StrategoEnvironment(cpu).reset()
@@ -183,7 +183,7 @@ def test_remember_batch_uses_the_lanes_n_step_buffer(cpu, tiny_network):
 
 def test_opponent_moves_update_the_lanes_own_history(cpu, tiny_network, config_override):
     config_override(AAREN_ENABLED=True)
-    from drqn_agent import RainbowAgent
+    from network.drqn_agent import RainbowAgent
     from environment import StrategoEnvironment
     agent = RainbowAgent(player_id=1, device=cpu, num_envs=3)
     state = StrategoEnvironment(cpu).reset()

@@ -4,7 +4,7 @@ import random
 import torch
 from collections import namedtuple, deque
 
-from action_encoding import NUM_ACTIONS
+from environment.action_encoding import NUM_ACTIONS
 
 # Define Experience namedtuple
 # history_snapshot / next_history_snapshot: compact AAREN action history for replay-time reconstruction

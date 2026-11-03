@@ -3,10 +3,10 @@ import time
 import torch
 import numpy as np
 import copy
-from drqn_agent import RainbowAgent
-from game_state import GameState
-from piece import PieceType
-from history_aggregator import HistoryAggregator
+from network.drqn_agent import RainbowAgent
+from environment.game_state import GameState
+from environment.piece import PieceType
+from network.history_aggregator import HistoryAggregator
 
 def benchmark_history_update():
     print("--- Benchmarking History Aggregator Update ---")

@@ -40,8 +40,7 @@ def test_trainer_runs_and_learns(tmp_path, config_override, monkeypatch):
 
 
 def test_the_trainer_records_how_each_game_ended(tmp_path, config_override, monkeypatch):
-    import train_dqn
-    MetricsTracker = train_dqn.MetricsTracker  # the trainer's copy (training.* is a second module)
+    from network.training import MetricsTracker
     trackers = []
     original_init = MetricsTracker.__init__
 

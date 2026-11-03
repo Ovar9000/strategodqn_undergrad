@@ -35,14 +35,6 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, 'reconfigure'):
         _stream.reconfigure(errors='replace')
 
-# Add the project root and subdirectories to sys.path to enable legacy imports
-project_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(project_root)
-for d in ['environment', 'network', 'settings', 'test', 'visualizers', 'utils']:
-    sys.path.append(os.path.join(project_root, d))
-# Also add the parent directory for Research-level imports
-sys.path.append(os.path.dirname(project_root))
-
 # Consolidated imports from reorganized packages
 from environment import (
     StrategoEnvironment, ParallelStrategoEnvironment, LAKE_SQUARE,
@@ -177,7 +169,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
             print("   Full observability mode: ENABLED (Phase 1)")
         
         # Set max turns based on curriculum phase
-        from training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
+        from settings.training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
         max_turns = PHASE_MAX_TURNS.get(curriculum.current_phase.value, DEFAULT_MAX_TURNS)
         parallel_env.set_max_turns(max_turns)
         print(f"   Max turns per game: {max_turns} (Phase {curriculum.current_phase.value})")
@@ -299,7 +291,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
           f"{agent1.history_embedding_size} (AAREN) = {agent1.input_channels}; actions: {agent1.action_size}")
     
     # AAREN optimization: track steps for interval-based updates
-    from training_config import PBS_UPDATE_INTERVAL as HISTORY_UPDATE_INTERVAL
+    from settings.training_config import PBS_UPDATE_INTERVAL as HISTORY_UPDATE_INTERVAL
     
     # Helper function to generate placements and reset a single lane
 
@@ -337,7 +329,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
         }
     
     # Frozen snapshot: the league checkpoint it holds, and the episode it was (re)loaded at
-    from training_config import OPPONENT_CYCLE_INTERVAL
+    from settings.training_config import OPPONENT_CYCLE_INTERVAL
     _snapshot_path = [None]
     _snapshot_loaded_at = [None]
 
@@ -450,7 +442,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
     def run_evaluation():
         """EVAL_GAMES greedy games against each gate opponent of the phase (smart_heuristic once no
         gates are left, for the record); the results go to the curriculum and the metrics."""
-        from training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
+        from settings.training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
         phase = curriculum.current_phase.value
         gates = curriculum.evaluation_gates()
         results = {}
@@ -598,7 +590,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                 if revealed and len(revealed) == 2 and actions[i] is not None:
                     # A battle: label each tracker's ENEMY piece with that piece's own type (the
                     # thesis loop labelled an attacking enemy's history with its victim's type)
-                    from training_config import AAREN_USE_REVEAL_DATA
+                    from settings.training_config import AAREN_USE_REVEAL_DATA
                     (_, attacker_type), (_, defender_type) = revealed
                     game_phase = "early" if lane_step_counts[i] < 50 else ("mid" if lane_step_counts[i] < 200 else "end")
                     trackers = []
@@ -798,7 +790,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                         parallel_env.set_full_observability(curriculum.get_observability_rate())
                         
                         # Update max turns for new phase
-                        from training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
+                        from settings.training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
                         new_max_turns = PHASE_MAX_TURNS.get(curriculum.current_phase.value, DEFAULT_MAX_TURNS)
                         parallel_env.set_max_turns(new_max_turns)
                         tqdm.write(f"[INFO] Max turns updated to {new_max_turns}")

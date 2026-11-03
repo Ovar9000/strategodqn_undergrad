@@ -4,12 +4,12 @@ import numpy as np
 import pytest
 import torch
 
-from action_encoding import NUM_ACTIONS, encode_move, legal_action_mask, mirror_action
+from environment.action_encoding import NUM_ACTIONS, encode_move, legal_action_mask, mirror_action
 from environment import StrategoEnvironment
 
 
 def _agent(cpu, **kwargs):
-    from drqn_agent import RainbowAgent
+    from network.drqn_agent import RainbowAgent
     kwargs.setdefault('num_envs', 1)
     kwargs.setdefault('buffer_size', 200)
     return RainbowAgent(player_id=1, device=cpu, **kwargs)
@@ -134,7 +134,7 @@ def test_replay_masks_the_double_dqn_action(cpu, tiny_network, config_override, 
 # ---------------------------------------------------------------- one gamma
 
 def test_one_discount_factor(cpu, tiny_network):
-    from training_config import GAMMA, N_STEPS
+    from settings.training_config import GAMMA, N_STEPS
     agent = _agent(cpu)
     assert agent.gamma == GAMMA
     assert agent.n_step_buffers[0].gamma == GAMMA
@@ -165,7 +165,7 @@ def test_target_starts_as_a_copy_and_is_hard_copied_every_n_updates(cpu, tiny_ne
 # ---------------------------------------------------------------- PER
 
 def test_new_samples_get_the_largest_priority_so_far():
-    from prioritized_memory import PrioritizedReplayBuffer
+    from network.prioritized_memory import PrioritizedReplayBuffer
     buf = PrioritizedReplayBuffer(100, device='cpu', alpha=0.6)
     x = torch.zeros(30, 10, 10)
     buf.add(x, 0, 0.0, x, False)
@@ -231,7 +231,7 @@ def test_rotate_augmentation_is_rejected(cpu, tiny_network, config_override):
 # ---------------------------------------------------------------- uint8 storage
 
 def test_observations_are_stored_as_uint8_and_read_back(cpu, tiny_network):
-    from prioritized_memory import pack_state, unpack_states
+    from network.prioritized_memory import pack_state, unpack_states
     agent = _agent(cpu)
     state = StrategoEnvironment(cpu).reset()
     x = agent.get_batch_state_representation([state.board], [state])[0]
@@ -259,7 +259,7 @@ def test_turn_tracker_hands_over_the_movers_next_legal_moves():
 
 def test_trainer_stores_next_legal_moves_of_the_learner(tmp_path, config_override, monkeypatch):
     from network import RainbowAgent
-    from test_trainer_smoke import run_tiny_training
+    from .test_trainer_smoke import run_tiny_training
     calls = []
     original = RainbowAgent.remember_batch
 

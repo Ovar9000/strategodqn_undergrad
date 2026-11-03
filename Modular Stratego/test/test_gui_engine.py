@@ -11,14 +11,13 @@ import torch
 
 GUI = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                    'Python Stratego Game')
-sys.path.insert(0, GUI)
 
 import stratego as S  # noqa: E402
 from environment import StrategoEnvironment, HeuristicSetupAgent  # noqa: E402
-from board import LAKE_SQUARE  # noqa: E402
-from observation import encode_observations, CH_OWN_REVEALED, CH_NO_BATTLE, CH_PROGRESS  # noqa: E402
+from environment.board import LAKE_SQUARE  # noqa: E402
+from environment.observation import encode_observations, CH_OWN_REVEALED, CH_NO_BATTLE, CH_PROGRESS  # noqa: E402
 from setup_agent_integration import GUI_RANK  # noqa: E402
-from training_config import DEFAULT_MAX_TURNS, EVAL_NO_BATTLE_DRAW_PLIES  # noqa: E402
+from settings.training_config import DEFAULT_MAX_TURNS, EVAL_NO_BATTLE_DRAW_PLIES  # noqa: E402
 
 OWNER = {1: 1, -1: 2}  # environment player -> GUI owner
 

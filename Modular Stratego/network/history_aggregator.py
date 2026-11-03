@@ -15,11 +15,11 @@ import torch.optim as optim
 from typing import Tuple, Optional, List, Dict
 from collections import defaultdict, deque
 
-from aaren.network import PieceActionAaren
-from piece import PieceType, NUM_PIECE_TYPES
-from battle import BattleResolver
-from action_encoding import canonical_coords
-from training_config import DEFAULT_MAX_TURNS
+from network.aaren.network import PieceActionAaren
+from environment.piece import PieceType, NUM_PIECE_TYPES
+from environment.battle import BattleResolver
+from environment.action_encoding import canonical_coords
+from settings.training_config import DEFAULT_MAX_TURNS
 
 # Default configuration
 DEFAULT_HIDDEN_SIZE = 64

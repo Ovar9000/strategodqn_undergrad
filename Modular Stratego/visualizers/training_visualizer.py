@@ -15,8 +15,8 @@ import io
 from typing import List, Dict, Optional, Tuple
 from PIL import Image
 import glob
-from piece import PieceType, PIECE_NAMES, PIECE_RANKS
-from board import BOARD_SIZE, EMPTY_SQUARE, LAKE_SQUARE, HIDDEN_PIECE
+from environment.piece import PieceType, PIECE_NAMES, PIECE_RANKS
+from environment.board import BOARD_SIZE, EMPTY_SQUARE, LAKE_SQUARE, HIDDEN_PIECE
 
 WINDOW = 100  # episodes in the trailing averages of the progress plots
 

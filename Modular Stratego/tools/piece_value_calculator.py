@@ -21,16 +21,10 @@ import json
 import os
 from tqdm import tqdm
 
-import sys
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for sub in ('', 'environment', 'network', 'settings', 'visualizers', 'utils'):
-    if os.path.join(ROOT, sub) not in sys.path:
-        sys.path.insert(0, os.path.join(ROOT, sub))
-
-from piece import PieceType
+from environment.piece import PieceType
 from environment import StrategoEnvironment
-from drqn_agent import RainbowAgent
-from opponents import RandomAgent
+from network.drqn_agent import RainbowAgent
+from network.opponents import RandomAgent
 
 
 @dataclass

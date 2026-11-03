@@ -5,7 +5,7 @@
 
 import torch
 
-from prioritized_memory import EpisodicReplayBuffer
+from network.prioritized_memory import EpisodicReplayBuffer
 
 
 def make_transition(step_idx, reward=0.1):
@@ -107,6 +107,6 @@ def test_sampled_actions_are_long():
 
 
 def test_config_flags():
-    from training_config import EPISODE_REPLAY_ENABLED, EPISODE_REPLAY_MAX_EPISODES
+    from settings.training_config import EPISODE_REPLAY_ENABLED, EPISODE_REPLAY_MAX_EPISODES
     assert isinstance(EPISODE_REPLAY_ENABLED, bool)
     assert EPISODE_REPLAY_MAX_EPISODES > 0

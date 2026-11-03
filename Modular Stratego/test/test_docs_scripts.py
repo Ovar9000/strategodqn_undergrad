@@ -7,22 +7,20 @@ import sys
 
 import pytest
 
-DOCS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'docs')
 SCRIPTS = ['architecture_comparison', 'full_comparison_analysis', 'generate_comparison',
            'debug_shape', 'parse_history', 'examine_checkpoint']
 
 
 @pytest.fixture(autouse=True)
-def _docs_on_path(monkeypatch):
-    monkeypatch.syspath_prepend(DOCS)
+def _fresh_imports():
     yield
     for name in SCRIPTS:
-        sys.modules.pop(name, None)
+        sys.modules.pop(f'docs.{name}', None)
 
 
 @pytest.mark.parametrize('name', SCRIPTS)
 def test_imports_without_side_effects(name, tmp_path, capsys):
-    importlib.import_module(name)
+    importlib.import_module(f'docs.{name}')
     assert os.listdir(tmp_path) == []  # nothing written to the cwd
     assert capsys.readouterr().out == ''
 
@@ -42,7 +40,7 @@ def _history(tmp_path, name, episodes, wins_p1):
 
 
 def test_generate_comparison_writes_a_table(tmp_path):
-    gc = importlib.import_module('generate_comparison')
+    gc = importlib.import_module('docs.generate_comparison')
     out = tmp_path / 'cmp.md'
     gc.main([_history(tmp_path, 'a.json', 10, 3), _history(tmp_path, 'b.json', 10, 7), '-o', str(out)])
     text = out.read_text()
@@ -52,7 +50,7 @@ def test_generate_comparison_writes_a_table(tmp_path):
 
 @pytest.mark.xfail(strict=True, reason="Step 8: moving win rate sums the running win count (100 wins -> 5050%)")
 def test_moving_win_rate_of_100_straight_wins_is_100_percent(tmp_path):
-    gc = importlib.import_module('generate_comparison')
+    gc = importlib.import_module('docs.generate_comparison')
     result = gc.process_file(_history(tmp_path, 'h.json', 100, 100))
     assert result['Final Moving Win Rate (100-ep)'] == '100.00%'
     assert result['Max Moving Win Rate (100-ep)'] == '100.00%'

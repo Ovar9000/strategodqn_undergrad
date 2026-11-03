@@ -10,7 +10,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import List, Tuple, Optional
-from game_state import GameState
+from environment.game_state import GameState
 
 # Try to import imageio for GIF creation
 try:
@@ -182,7 +182,7 @@ class DQNMoveVisualizer:
                                 piece_type_value = abs(piece_value)
                                 
                                 # Get proper piece label
-                                from piece import PieceType, PIECE_NAMES
+                                from environment.piece import PieceType, PIECE_NAMES
                                 try:
                                     piece_type = PieceType(piece_type_value)
                                     piece_label = PIECE_NAMES.get(piece_type, str(piece_type_value))

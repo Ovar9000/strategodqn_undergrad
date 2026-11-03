@@ -5,8 +5,8 @@ import os
 
 import numpy as np
 
-import training_visualizer as V
-from training import Checkpointer, MetricsTracker
+from visualizers import training_visualizer as V
+from network.training import Checkpointer, MetricsTracker
 
 
 def test_moving_average_and_outcomes():

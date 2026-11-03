@@ -1,11 +1,6 @@
 import os
 import sys
 
-# Add the bot directory to path
-BOT_DIR = os.path.dirname(os.path.abspath(__file__))
-if BOT_DIR not in sys.path:
-    sys.path.insert(0, BOT_DIR)
-
 from dqn_bot_logic import ExpectamaxSearch
 
 def test_utility():
@@ -18,7 +13,7 @@ def test_utility():
     agent = MockAgent()
     search = ExpectamaxSearch(agent)
     
-    from piece import PieceType
+    from environment.piece import PieceType
 
     scenarios = [
         # GUI Ranks (stratego.py: Marshal=10, General=9, Miner=3, Scout=2, Spy=1, Bomb=0, Flag=-1)

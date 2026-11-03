@@ -3,12 +3,7 @@
 import sys
 import os
 
-# Add the current directory to the Python path so we can import local modules
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
-
-from live_dqn_demo import run_live_dqn_game, test_flag_deployment, test_bomb_movement
+from visualizers.live_dqn_demo import run_live_dqn_game, test_flag_deployment, test_bomb_movement
 
 def main():
     """Main function to run the live Stratego demo."""

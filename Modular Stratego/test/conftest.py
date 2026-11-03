@@ -5,15 +5,8 @@ import sys
 
 import pytest
 
+# Modular Stratego (the import root) and Python Stratego Game are on sys.path via pytest.ini
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# Same import layout as train_dqn.py (modules import each other by bare name)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-for _d in ['environment', 'network', 'settings', 'test', 'visualizers', 'utils']:
-    _p = os.path.join(PROJECT_ROOT, _d)
-    if _p not in sys.path:
-        sys.path.append(_p)
 
 import matplotlib
 matplotlib.use('Agg')
@@ -63,7 +56,7 @@ def config_override(monkeypatch):
     so the value is patched on every loaded project module that has the name, plus on
     training_config and settings so later imports pick it up. Undone after the test.
     """
-    import training_config
+    from settings import training_config
     import settings
 
     def apply(**values):

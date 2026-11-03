@@ -3,11 +3,8 @@ import sys
 import os
 import random
 
-# Add parent directory to path
-sys.path.append(os.getcwd())
-
-from piece import PieceType, PIECE_NAMES
-from heuristic_setup import HeuristicSetupAgent
+from environment.piece import PieceType, PIECE_NAMES
+from environment.heuristic_setup import HeuristicSetupAgent
 
 # Lake Positions (Standard Stratego)
 LAKES = {(4, 2), (4, 3), (5, 2), (5, 3), (4, 6), (4, 7), (5, 6), (5, 7)}

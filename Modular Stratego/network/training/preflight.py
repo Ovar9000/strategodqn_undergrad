@@ -1,20 +1,13 @@
 import os
 import sys
 
-# Bootstrap sys.path for standalone execution
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-for d in ['', 'visualizers', 'network', 'environment', 'settings', 'utils']:
-    p = os.path.join(project_root, d) if d else project_root
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from training_visualizer import plot_training_progress, plot_pbs_evaluator_progress, plot_additional_metrics
+from visualizers.training_visualizer import plot_training_progress, plot_pbs_evaluator_progress, plot_additional_metrics
 from environment import StrategoEnvironment
-from drqn_agent import RainbowAgent
-from training_config import NUM_ENVS
+from network.drqn_agent import RainbowAgent
+from settings.training_config import NUM_ENVS
 
 def run_preflight_checks(model_save_path: str):
     print("\n   Running Pre-Flight Checks...")

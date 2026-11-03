@@ -11,8 +11,8 @@ import torch.nn.functional as F
 from typing import Tuple
 
 from .noisy_linear import NoisyLinear
-from action_encoding import ACTIONS_PER_SQUARE, NUM_ACTIONS
-from observation import NUM_OBS_PLANES
+from environment.action_encoding import ACTIONS_PER_SQUARE, NUM_ACTIONS
+from environment.observation import NUM_OBS_PLANES
 
 
 class ResidualBlock(nn.Module):
@@ -126,7 +126,7 @@ class RainbowDQN(nn.Module):
                              f"= {board_squares * ACTIONS_PER_SQUARE} (got {output_size})")
         
         # Backbone size comes from training_config (defaults: 64 channels, 6 blocks, 4 heads)
-        from training_config import NETWORK_CHANNELS, RESNET_BLOCKS, ATTENTION_HEADS, ADVANTAGE_HIDDEN
+        from settings.training_config import NETWORK_CHANNELS, RESNET_BLOCKS, ATTENTION_HEADS, ADVANTAGE_HIDDEN
         channels = channels or NETWORK_CHANNELS
         res_blocks = RESNET_BLOCKS if res_blocks is None else res_blocks
         attention_heads = attention_heads or ATTENTION_HEADS

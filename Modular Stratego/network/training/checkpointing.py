@@ -12,7 +12,8 @@ import shutil
 import tempfile
 from typing import Optional, Dict, Any, Tuple
 
-from training_visualizer import plot_training_progress, plot_additional_metrics
+from network.training import legacy_pickle
+from visualizers.training_visualizer import plot_training_progress, plot_additional_metrics
 
 
 class Checkpointer:
@@ -132,7 +133,8 @@ class Checkpointer:
             state_path = os.path.join(temp_dir, "agent_state.pt")
             if os.path.exists(state_path):
                 # Using weights_only=False because we trust our own archives and buffers might have complex types
-                full_state = torch.load(state_path, map_location=agent.device, weights_only=False)
+                full_state = torch.load(state_path, map_location=agent.device, weights_only=False,
+                                        pickle_module=legacy_pickle)
                 agent.load_state_dict(full_state)
     
     def save_checkpoint(
@@ -263,7 +265,7 @@ class Checkpointer:
             
             # AAREN End-to-End Training Visualization (no figure when AAREN is off)
             try:
-                from training_visualizer import plot_aaren_progress
+                from visualizers.training_visualizer import plot_aaren_progress
                 plot_aaren_progress(
                     episode_history=plot_data['episode_history'],
                     aaren_losses=metrics_tracker.metrics.get('aaren_loss', []),

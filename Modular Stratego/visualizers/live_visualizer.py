@@ -6,13 +6,10 @@ import os
 import time
 from typing import Dict, Tuple, Optional, List
 
-# Add repository root to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from environment import StrategoEnvironment
-from drqn_agent import RainbowAgent
-from piece import PieceType, PIECE_NAMES, PIECE_RANKS
-from board import BOARD_SIZE, LAKE_SQUARE
+from network.drqn_agent import RainbowAgent
+from environment.piece import PieceType, PIECE_NAMES, PIECE_RANKS
+from environment.board import BOARD_SIZE, LAKE_SQUARE
 
 # --- Constants ---
 SCREEN_WIDTH = 1200

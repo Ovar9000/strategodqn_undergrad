@@ -2,12 +2,12 @@ import torch
 import random
 import numpy as np
 from typing import List, Tuple, Optional, Dict
-from board import Board, BOARD_SIZE, EMPTY_SQUARE, LAKE_SQUARE, HIDDEN_PIECE
-from piece import PieceType
-from battle import BattleResolver
-from dqn_visualizer import DQNMoveVisualizer
-from game_state import GameState
-from training_config import REWARD_SCALE, DEFAULT_MAX_TURNS, NO_BATTLE_DRAW_PLIES
+from environment.board import Board, BOARD_SIZE, EMPTY_SQUARE, LAKE_SQUARE, HIDDEN_PIECE
+from environment.piece import PieceType
+from environment.battle import BattleResolver
+from visualizers.dqn_visualizer import DQNMoveVisualizer
+from environment.game_state import GameState
+from settings.training_config import REWARD_SCALE, DEFAULT_MAX_TURNS, NO_BATTLE_DRAW_PLIES
 
 _DIRECTIONS = ((0, 1), (0, -1), (1, 0), (-1, 0))
 _IMMOBILE = (PieceType.FLAG.value, PieceType.BOMB.value)

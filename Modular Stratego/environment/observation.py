@@ -26,8 +26,8 @@ from typing import Optional, Sequence
 
 import torch
 
-from action_encoding import BOARD_SIZE, is_first_player
-from board import HIDDEN_PIECE, LAKE_SQUARE
+from environment.action_encoding import BOARD_SIZE, is_first_player
+from environment.board import HIDDEN_PIECE, LAKE_SQUARE
 
 NUM_RANKS = 12
 CH_OWN = 0

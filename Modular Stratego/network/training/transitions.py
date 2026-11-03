@@ -8,7 +8,7 @@ both sides are closed as terminal, whichever side made the last move.
 
 from typing import Dict, List, Optional
 
-from training_config import DRAW_REWARD
+from settings.training_config import DRAW_REWARD
 
 
 def outcome_reward(winner: Optional[int], player: int) -> float:

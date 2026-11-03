@@ -6,9 +6,9 @@ Uses strategic heuristics to prioritize attacks, advancement, and center control
 """
 
 import torch
-from action_encoding import NUM_ACTIONS, legal_action_indices
+from environment.action_encoding import NUM_ACTIONS, legal_action_indices
 from typing import List, Tuple, Optional
-from board import LAKE_SQUARE
+from environment.board import LAKE_SQUARE
 
 
 class HeuristicMoveFilter:

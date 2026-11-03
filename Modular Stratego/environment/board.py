@@ -3,7 +3,7 @@
 
 import torch
 from typing import Tuple, List, Set
-from piece import PieceType
+from environment.piece import PieceType
 
 BOARD_SIZE = 10
 EMPTY_SQUARE = 0

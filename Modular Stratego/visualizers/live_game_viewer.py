@@ -6,8 +6,8 @@ import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 import numpy as np
 from typing import List, Tuple, Optional, Dict
-from piece import PieceType, PIECE_NAMES
-from board import BOARD_SIZE, EMPTY_SQUARE, LAKE_SQUARE, HIDDEN_PIECE
+from environment.piece import PieceType, PIECE_NAMES
+from environment.board import BOARD_SIZE, EMPTY_SQUARE, LAKE_SQUARE, HIDDEN_PIECE
 import threading
 import time
 

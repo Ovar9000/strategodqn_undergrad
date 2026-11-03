@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from networks.rainbow_dqn import SpatialAttention
+from network.networks.rainbow_dqn import SpatialAttention
 
 C = 64
 

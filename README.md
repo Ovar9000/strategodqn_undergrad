@@ -294,7 +294,7 @@ python play_standard.py
 ```bash
 cd "Modular Stratego"
 pip install onnx onnxruntime
-python tools/export_onnx.py path/to/agent1_league_episode_N.pt web/model.onnx
+python -m tools.export_onnx path/to/agent1_league_episode_N.pt web/model.onnx
 ```
 Without a model the page plays a simple heuristic bot.
 
@@ -317,7 +317,7 @@ python -m pytest -q
 Tests marked `xfail` document known bugs that a later cleanup step fixes. The preflight checks still run on their own:
 
 ```bash
-python network/training/preflight.py
+python -m network.training.preflight
 ```
 
 ### 5. Train the MARQ Agent
@@ -329,6 +329,12 @@ python train_dqn.py
 ```
 
 Hyperparameters can be adjusted in [`Modular Stratego/settings/training_config.py`](Modular%20Stratego/settings/training_config.py).
+
+`Modular Stratego/` is the import root: modules import each other through their packages
+(`from environment.board import ...`, `from settings.training_config import ...`). Run scripts from
+that folder, and the ones in subfolders as modules (`python -m tools.export_onnx`,
+`python -m visualizers.visualize_q_values`). The GUI puts the folder on `sys.path` in one place,
+`Python Stratego Game/marq_path.py`.
 
 ---
 

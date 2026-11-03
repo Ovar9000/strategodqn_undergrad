@@ -6,7 +6,7 @@ import time
 import pytest
 
 from environment import StrategoEnvironment
-from piece import PieceType as P
+from environment.piece import PieceType as P
 
 
 def position(cpu, p1, p2, player=1, **kwargs):
@@ -101,7 +101,7 @@ def test_no_battle_rule_can_be_turned_off(cpu):
 
 
 def test_training_and_eval_limits(cpu):
-    from training_config import NO_BATTLE_DRAW_PLIES, EVAL_NO_BATTLE_DRAW_PLIES
+    from settings.training_config import NO_BATTLE_DRAW_PLIES, EVAL_NO_BATTLE_DRAW_PLIES
     assert (NO_BATTLE_DRAW_PLIES, EVAL_NO_BATTLE_DRAW_PLIES) == (100, 200)
     assert StrategoEnvironment(cpu).no_battle_draw_plies == NO_BATTLE_DRAW_PLIES
     assert StrategoEnvironment(cpu, no_battle_draw_plies=EVAL_NO_BATTLE_DRAW_PLIES).no_battle_draw_plies == 200

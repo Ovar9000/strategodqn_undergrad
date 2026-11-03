@@ -10,9 +10,9 @@ import subprocess
 import pytest
 import torch
 
-from action_encoding import legal_action_indices
+from environment.action_encoding import legal_action_indices
 from environment import StrategoEnvironment, HeuristicSetupAgent
-from observation import encode_observation
+from environment.observation import encode_observation
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NODE = shutil.which('node')
@@ -66,8 +66,7 @@ def test_onnx_export_gives_the_agents_expected_q_values(tmp_path, tiny_network):
     import numpy as np
     import onnxruntime
     from network import RainbowAgent
-    sys.path.insert(0, os.path.join(ROOT, 'tools'))
-    import export_onnx
+    from tools import export_onnx
     agent = RainbowAgent(player_id=1, device=torch.device('cpu'), use_pbs=False, buffer_size=100)
     agent.save_model(str(tmp_path / 'agent.pth'))
     out = export_onnx.export(str(tmp_path / 'agent.pth'), str(tmp_path / 'agent.onnx'))

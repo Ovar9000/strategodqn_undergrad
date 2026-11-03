@@ -17,11 +17,11 @@ import random
 import pytest
 import torch
 
-from distributional_reward import (UnifiedRewardShaper, StrategoRewardConfig, compute_potential,
+from network.distributional_reward import (UnifiedRewardShaper, StrategoRewardConfig, compute_potential,
                                    ARMY_MATERIAL, UNKNOWN_PIECE_RANK)
-from game_state import GameState
-from piece import PieceType
-from training_config import GAMMA
+from environment.game_state import GameState
+from environment.piece import PieceType
+from settings.training_config import GAMMA
 
 HIDDEN = -20
 
@@ -229,6 +229,6 @@ def test_dead_code_removed():
 
 def test_c51_support():
     """C51 support range in agent"""
-    from drqn_agent import V_MIN, V_MAX, NUM_ATOMS
+    from network.drqn_agent import V_MIN, V_MAX, NUM_ATOMS
     assert V_MIN == -10.0 and V_MAX == 10.0 and NUM_ATOMS == 51
     assert abs((V_MAX - V_MIN) / (NUM_ATOMS - 1) - 0.4) < 0.01

@@ -7,11 +7,6 @@ import sys
 from typing import List, Dict, Tuple, Optional
 from stratego import Board, auto_setup, side_name, FILES, Piece, result_message
 
-# Access the MARQ framework from the sibling directory
-MODULAR_STRATEGO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Modular Stratego"))
-if MODULAR_STRATEGO_PATH not in sys.path:
-    sys.path.append(MODULAR_STRATEGO_PATH)
-
 from dqn_bot_logic import DQNBotLogic
 from setup_agent_integration import place_army
 

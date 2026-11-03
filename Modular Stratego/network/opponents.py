@@ -10,9 +10,9 @@ Specialized opponent agents for league training.
 import torch
 import random
 from typing import List, Tuple, Optional
-from piece import PieceType, PIECE_RANKS
-from distributional_reward import StrategoRewardConfig
-from battle import battle_from_values, is_enemy_value
+from environment.piece import PieceType, PIECE_RANKS
+from network.distributional_reward import StrategoRewardConfig
+from environment.battle import battle_from_values, is_enemy_value
 
 
 class RandomAgent:

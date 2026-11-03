@@ -6,13 +6,10 @@ import os
 import sys
 from tqdm import tqdm
 
-# Add parent directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from parallel_environment import ParallelStrategoEnvironment
-from drqn_agent import DRQNAgent
-from heuristic_setup import HeuristicSetupAgent
-from training_config import *
+from environment.parallel_environment import ParallelStrategoEnvironment
+from network.drqn_agent import RainbowAgent
+from environment.heuristic_setup import HeuristicSetupAgent
+from settings.training_config import *
 
 def profile_training():
     print("Starting Performance Profiling...")
@@ -30,8 +27,8 @@ def profile_training():
     
     # Initialize Agents
     print("Initializing Agents...")
-    agent1 = DRQNAgent(player_id=1, device=device, lr=LEARNING_RATE, batch_size=BATCH_SIZE, num_envs=NUM_ENVS, buffer_size=MEMORY_SIZE)
-    agent2 = DRQNAgent(player_id=-1, device=device, lr=LEARNING_RATE, batch_size=BATCH_SIZE, num_envs=NUM_ENVS, buffer_size=MEMORY_SIZE)
+    agent1 = RainbowAgent(player_id=1, device=device, lr=LEARNING_RATE, batch_size=BATCH_SIZE, num_envs=NUM_ENVS, buffer_size=MEMORY_SIZE)
+    agent2 = RainbowAgent(player_id=-1, device=device, lr=LEARNING_RATE, batch_size=BATCH_SIZE, num_envs=NUM_ENVS, buffer_size=MEMORY_SIZE)
     
     setup_agent1 = HeuristicSetupAgent(player_id=1, device=device)
     setup_agent2 = HeuristicSetupAgent(player_id=-1, device=device)

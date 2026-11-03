@@ -12,9 +12,7 @@ import torch.nn.functional as F
 import numpy as np
 from typing import List, Tuple
 
-_ENV = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Modular Stratego", "environment"))
-if _ENV not in sys.path:
-    sys.path.append(_ENV)
+import marq_path  # noqa: F401  (Modular Stratego on sys.path)
 
 # Piece rank constants (matching stratego.py)
 PIECE_COUNTS = {
@@ -311,7 +309,7 @@ def place_army(board, owner: int, Piece, model_path: str = None) -> str:
     if model_path and os.path.exists(model_path):
         StrategicSetupAgent(owner, model_path).apply_setup_to_board(board, Piece)
         return "learned"
-    from heuristic_setup import smart_heuristic_setup
+    from environment.heuristic_setup import smart_heuristic_setup
     rows = range(6, 10) if owner == 1 else range(0, 4)
     cells = [(r, c) for r in rows for c in range(10)]
     pieces = [pt for pt, n in ARMY.items() for _ in range(n)]
@@ -321,7 +319,7 @@ def place_army(board, owner: int, Piece, model_path: str = None) -> str:
 
 
 def _army():
-    from piece import PieceType
+    from environment.piece import PieceType
     # GUI ranks (Spy 1 ... Marshal 10, Bomb 0, Flag -1) of the environment's PieceTypes
     rank = {PieceType.FLAG: -1, PieceType.BOMB: 0}
     rank.update({pt: pt.value - 1 for pt in PieceType if pt not in rank})

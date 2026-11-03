@@ -11,14 +11,12 @@ import sys
 import glob
 from collections import defaultdict
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from environment import StrategoEnvironment
-from parallel_environment import ParallelStrategoEnvironment
-from drqn_agent import RainbowAgent
-from heuristic_setup import HeuristicSetupAgent
-from game_state import GameState
-from training_config import *
+from environment.parallel_environment import ParallelStrategoEnvironment
+from network.drqn_agent import RainbowAgent
+from environment.heuristic_setup import HeuristicSetupAgent
+from environment.game_state import GameState
+from settings.training_config import *
 
 class Profiler:
     def __init__(self):

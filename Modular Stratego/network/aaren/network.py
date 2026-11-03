@@ -15,7 +15,7 @@ from .kernel import aaren_scan_kernel
 
 # Import NUM_PIECE_TYPES from piece module
 try:
-    from piece import NUM_PIECE_TYPES
+    from environment.piece import NUM_PIECE_TYPES
 except ImportError:
     NUM_PIECE_TYPES = 12  # Fallback default
 

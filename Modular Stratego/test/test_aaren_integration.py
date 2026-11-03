@@ -7,13 +7,13 @@ AAREN is off by default (AAREN_ENABLED); these tests switch it on.
 import pytest
 import torch
 
-from drqn_agent import RainbowAgent
-from history_aggregator import HistoryAggregator
-from networks.rainbow_dqn import RainbowDQN
-from training_config import AAREN_HIDDEN_SIZE, AAREN_NUM_LAYERS, HISTORY_EMBEDDING_SIZE
+from network.drqn_agent import RainbowAgent
+from network.history_aggregator import HistoryAggregator
+from network.networks.rainbow_dqn import RainbowDQN
+from settings.training_config import AAREN_HIDDEN_SIZE, AAREN_NUM_LAYERS, HISTORY_EMBEDDING_SIZE
 from environment import StrategoEnvironment
-from board import HIDDEN_PIECE, LAKE_SQUARE
-from piece import PieceType
+from environment.board import HIDDEN_PIECE, LAKE_SQUARE
+from environment.piece import PieceType
 
 OBS_PLANES = 30
 NUM_ACTIONS = 3600
@@ -285,7 +285,7 @@ def test_next_state_is_stored_with_the_history_it_will_be_acted_on_with(cpu, aar
 
 def test_trainer_runs_with_aaren_on(tmp_path, config_override, monkeypatch):
     """Both agents track histories (agent2 from Phase 4) and battles are recorded per tracker."""
-    from test_trainer_smoke import run_tiny_training
+    from .test_trainer_smoke import run_tiny_training
     battles = []
     real = HistoryAggregator.record_battle
 

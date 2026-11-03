@@ -6,13 +6,13 @@ import sys
 import pytest
 import torch
 
-from test_trainer_smoke import run_tiny_training
+from .test_trainer_smoke import run_tiny_training
 
 
 def test_nan_reward_batch_is_skipped_without_crashing(cpu, tiny_network, config_override):
     """drqn_agent used tqdm.write without importing tqdm: a NaN reward batch raised NameError."""
     config_override(WARMUP_STEPS=0)
-    from drqn_agent import RainbowAgent
+    from network.drqn_agent import RainbowAgent
     agent = RainbowAgent(player_id=1, device=cpu, buffer_size=200, num_envs=1)
     c = agent.input_channels
     for i in range(agent.batch_size * 2):
@@ -22,7 +22,7 @@ def test_nan_reward_batch_is_skipped_without_crashing(cpu, tiny_network, config_
 
 def test_phase_transition_log_survives_a_cp1252_console(tmp_path, monkeypatch):
     """advance_phase printed a non-ASCII arrow, which raises UnicodeEncodeError on a Windows console."""
-    from curriculum import CurriculumManager
+    from environment.curriculum import CurriculumManager
     curriculum = CurriculumManager(start_phase=1, save_dir=str(tmp_path))
     console = io.TextIOWrapper(io.BytesIO(), encoding='cp1252', errors='strict')
     monkeypatch.setattr(sys, 'stdout', console)

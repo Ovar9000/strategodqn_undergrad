@@ -5,13 +5,10 @@ import sys
 import os
 from typing import List, Tuple, Dict, Optional
 
-# Add parent directory to path if needed
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from drqn_agent import RainbowAgent
+from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
-from piece import PieceType
-from board import HIDDEN_PIECE, LAKE_SQUARE
+from environment.piece import PieceType
+from environment.board import HIDDEN_PIECE, LAKE_SQUARE
 
 def get_symbol(piece_value: int) -> str:
     """Get a symbol for the piece value."""

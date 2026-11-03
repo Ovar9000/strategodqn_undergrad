@@ -17,22 +17,22 @@ import math
 from collections import deque, namedtuple
 from typing import List, Tuple, Optional, Dict
 from tqdm import tqdm
-from piece import PieceType
-from board import LAKE_SQUARE
+from environment.piece import PieceType
+from environment.board import LAKE_SQUARE
 
 # Import from new modular structure
-from networks import NoisyLinear, RainbowDQN
-from history_aggregator import HistoryAggregator
-from aaren import PieceActionAaren
+from network.networks import NoisyLinear, RainbowDQN
+from network.history_aggregator import HistoryAggregator
+from network.aaren import PieceActionAaren
 
-from prioritized_memory import StandardReplayBuffer, PrioritizedReplayBuffer, NStepBuffer, Experience
+from network.prioritized_memory import StandardReplayBuffer, PrioritizedReplayBuffer, NStepBuffer, Experience
 
 # Heuristic Action Filter for Top-100 move selection
-from heuristic_filter import HeuristicMoveFilter
+from environment.heuristic_filter import HeuristicMoveFilter
 
 # Lossless 3600-action encoding and 30 observation planes, both in the mover's canonical frame
-from action_encoding import NUM_ACTIONS, encode_move, decode_action, mirror_action, legal_action_mask
-from observation import NUM_OBS_PLANES, encode_observations, to_canonical
+from environment.action_encoding import NUM_ACTIONS, encode_move, decode_action, mirror_action, legal_action_mask
+from environment.observation import NUM_OBS_PLANES, encode_observations, to_canonical
 
 # C51 Hyperparameters - CRITICAL FOR DISTRIBUTIONAL RL
 # Support range [-10, +10] with 51 atoms → 0.4 units/atom resolution.
@@ -90,7 +90,7 @@ class RainbowAgent:
         # with 0.999 ** 5, while the shaping used 0.999.)
         if gamma is None:
             try:
-                from training_config import GAMMA as gamma
+                from settings.training_config import GAMMA as gamma
             except ImportError:
                 gamma = 0.99
         self.gamma = gamma
@@ -102,7 +102,7 @@ class RainbowAgent:
         
         # Epsilon-greedy exploration (hybrid with Noisy Nets)
         try:
-            from training_config import EXPLORATION_EPSILON_START, EXPLORATION_EPSILON_END, EXPLORATION_EPSILON_DECAY
+            from settings.training_config import EXPLORATION_EPSILON_START, EXPLORATION_EPSILON_END, EXPLORATION_EPSILON_DECAY
             self.epsilon_start = EXPLORATION_EPSILON_START
             self.epsilon_end = EXPLORATION_EPSILON_END
             self.epsilon_decay = EXPLORATION_EPSILON_DECAY
@@ -127,7 +127,7 @@ class RainbowAgent:
         
         # Import AAREN optimization settings
         try:
-            from training_config import AAREN_HIDDEN_SIZE, AAREN_NUM_LAYERS, HISTORY_EMBEDDING_SIZE, AAREN_ENABLED
+            from settings.training_config import AAREN_HIDDEN_SIZE, AAREN_NUM_LAYERS, HISTORY_EMBEDDING_SIZE, AAREN_ENABLED
         except ImportError:
             AAREN_HIDDEN_SIZE = 64
             AAREN_NUM_LAYERS = 2
@@ -187,7 +187,7 @@ class RainbowAgent:
         # Target network: a hard copy of the online network, refreshed every target_update_interval
         # gradient updates (counted in replay)
         try:
-            from training_config import TARGET_UPDATE_INTERVAL
+            from settings.training_config import TARGET_UPDATE_INTERVAL
         except ImportError:
             TARGET_UPDATE_INTERVAL = 1000
         self.target_update_interval = TARGET_UPDATE_INTERVAL
@@ -205,7 +205,7 @@ class RainbowAgent:
         
         # PyTorch 2.0+ Compilation (optional speedup)
         try:
-            from training_config import USE_TORCH_COMPILE, TORCH_COMPILE_MODE
+            from settings.training_config import USE_TORCH_COMPILE, TORCH_COMPILE_MODE
             if USE_TORCH_COMPILE:
                 self.q_network = torch.compile(self.q_network, mode=TORCH_COMPILE_MODE)
                 self.target_network = torch.compile(self.target_network, mode=TORCH_COMPILE_MODE)
@@ -223,7 +223,7 @@ class RainbowAgent:
         
         # PyTorch 2.0+ Compilation (optional speedup)
         try:
-            from training_config import USE_TORCH_COMPILE, TORCH_COMPILE_MODE
+            from settings.training_config import USE_TORCH_COMPILE, TORCH_COMPILE_MODE
             if USE_TORCH_COMPILE:
                 self.reference_network = torch.compile(self.reference_network, mode=TORCH_COMPILE_MODE)
         except (ImportError, Exception):
@@ -235,7 +235,7 @@ class RainbowAgent:
         
         # KL and Entropy Regularization Settings
         try:
-            from training_config import (
+            from settings.training_config import (
                 KL_REG_ENABLED, KL_REG_WEIGHT, REF_POLICY_UPDATE_INTERVAL,
                 ENTROPY_REG_ENABLED, ENTROPY_COEFF_START, ENTROPY_COEFF_END, ENTROPY_ANNEAL_EPISODES
             )
@@ -257,7 +257,7 @@ class RainbowAgent:
         
         # Ataraxos Techniques Configuration
         try:
-            from training_config import (
+            from settings.training_config import (
                 ADVANTAGE_FILTERING_ENABLED, ADVANTAGE_OVERSAMPLE_FACTOR, ADVANTAGE_MIN_BATCH,
                 DYNAMIC_DAMPING_ENABLED, TOTAL_TRAINING_EPISODES,
                 MAGNET_COEFF_START, MAGNET_COEFF_END, MAGNET_POWER,
@@ -299,7 +299,7 @@ class RainbowAgent:
         
         # Import PER and N-Step settings
         try:
-            from training_config import (
+            from settings.training_config import (
                 PER_ENABLED, PER_ALPHA, PER_BETA_START, PER_BETA_END, PER_BETA_ANNEAL_EPISODES,
                 N_STEPS, LR_SCHEDULER_ENABLED, LR_SCHEDULER_STEP_SIZE, LR_SCHEDULER_GAMMA
             )
@@ -325,7 +325,7 @@ class RainbowAgent:
         
         # Episode-Level Replay Buffer (shadow storage alongside PER)
         try:
-            from training_config import (
+            from settings.training_config import (
                 EPISODE_REPLAY_ENABLED, EPISODE_REPLAY_MAX_EPISODES,
                 EPISODE_REPLAY_SEGMENT_LENGTH, EPISODE_REPLAY_MIX_RATIO
             )
@@ -338,7 +338,7 @@ class RainbowAgent:
             self.episode_replay_mix_ratio = 0.25
         
         if self.episode_replay_enabled and not self.inference_only:
-            from prioritized_memory import EpisodicReplayBuffer
+            from network.prioritized_memory import EpisodicReplayBuffer
             self.episode_memory = EpisodicReplayBuffer(
                 max_episodes=EPISODE_REPLAY_MAX_EPISODES,
                 segment_length=EPISODE_REPLAY_SEGMENT_LENGTH,
@@ -351,7 +351,7 @@ class RainbowAgent:
         
         # Data Augmentation Settings
         try:
-            from training_config import ENABLE_DATA_AUGMENTATION, AUGMENTATION_TYPES
+            from settings.training_config import ENABLE_DATA_AUGMENTATION, AUGMENTATION_TYPES
             self.aug_enabled = ENABLE_DATA_AUGMENTATION
             self.aug_types = AUGMENTATION_TYPES
         except ImportError:
@@ -444,7 +444,7 @@ class RainbowAgent:
         
         # Import AAREN settings
         try:
-            from training_config import AAREN_HIDDEN_SIZE, AAREN_NUM_LAYERS
+            from settings.training_config import AAREN_HIDDEN_SIZE, AAREN_NUM_LAYERS
         except ImportError:
             AAREN_HIDDEN_SIZE = 64
             AAREN_NUM_LAYERS = 2
@@ -884,7 +884,7 @@ class RainbowAgent:
         
         # IMITATION LEARNING: Use heuristic expert for portion of actions during early training
         try:
-            from training_config import IMITATION_ENABLED, IMITATION_RATIO, IMITATION_EPISODES
+            from settings.training_config import IMITATION_ENABLED, IMITATION_RATIO, IMITATION_EPISODES
         except ImportError:
             IMITATION_ENABLED = False
             IMITATION_RATIO = 0.0
@@ -1101,7 +1101,7 @@ class RainbowAgent:
         
         # Warmup check - don't train until we have enough experiences
         try:
-            from training_config import WARMUP_STEPS
+            from settings.training_config import WARMUP_STEPS
         except ImportError:
             WARMUP_STEPS = 0
         
@@ -1445,7 +1445,9 @@ class RainbowAgent:
                 checkpoint = torch.load(filepath, map_location=self.device, weights_only=True)
             except Exception:
                 # Fallback for complex checkpoints (we trust our own saves)
-                checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
+                from network.training import legacy_pickle
+                checkpoint = torch.load(filepath, map_location=self.device, weights_only=False,
+                                        pickle_module=legacy_pickle)
             
             # Robust state dict unwrapping for backward compatibility
             # Checkpoints saved without torch.compile lack '_orig_mod.', while loaded models may expect it (or vice versa)

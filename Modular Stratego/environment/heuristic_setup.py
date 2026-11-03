@@ -10,7 +10,7 @@ Fast piece placement with basic strategic rules:
 
 import random
 from typing import List, Tuple
-from piece import PieceType
+from environment.piece import PieceType
 
 
 def smart_heuristic_setup(pieces: List[PieceType], 

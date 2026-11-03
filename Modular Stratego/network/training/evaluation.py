@@ -7,8 +7,8 @@ outside the training lanes. The curriculum advances on these results, not on tra
 from typing import Dict, Optional
 
 from environment import StrategoEnvironment
-from heuristic_setup import HeuristicSetupAgent
-from training_config import EVAL_NO_BATTLE_DRAW_PLIES
+from environment.heuristic_setup import HeuristicSetupAgent
+from settings.training_config import EVAL_NO_BATTLE_DRAW_PLIES
 
 
 def play_evaluation_games(agent, opponent, num_games: int, device, full_observability=False,
