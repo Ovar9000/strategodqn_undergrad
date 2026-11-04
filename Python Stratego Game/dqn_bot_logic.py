@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Tuple, Optional, List, Dict
 
 import marq_path  # noqa: F401  (Modular Stratego on sys.path)
-from network.drqn_agent import RainbowAgent
+from network.drqn_agent import RainbowAgent, V_MIN, V_MAX, NUM_ATOMS
 from network.history_aggregator import HistoryAggregator
 from environment.piece import PieceType, NUM_PIECE_TYPES
 from environment.board import LAKE_SQUARE, HIDDEN_PIECE
@@ -39,12 +39,15 @@ ORTHOGONAL = ((-1, 0), (1, 0), (0, -1), (0, 1))
 class GuiObservation:
     """What environment/observation.py reads from a GameState, built from a GUI board: the
     viewer's grid, the counters behind planes 28-29 normalised by the limits the agent is
-    evaluated with, and the viewer's pieces the other side has seen (plane 26). Observability
-    (plane 27) is 0: the GUI plays with fog of war."""
+    evaluated with, the viewer's pieces the other side has seen (plane 26) and the pieces that
+    have moved / made a long move (planes 30-31). Observability (plane 27) is 0: the GUI plays
+    with fog of war."""
     board: np.ndarray
     own_revealed: np.ndarray
     turn_count: int
     plies_since_battle: int
+    moved: Optional[np.ndarray] = None
+    long_moved: Optional[np.ndarray] = None
     max_turns: int = DEFAULT_MAX_TURNS
     no_battle_draw_plies: int = EVAL_NO_BATTLE_DRAW_PLIES
     observability: float = 0.0
@@ -192,7 +195,7 @@ class ExpectamaxSearch:
         # as network input, and let every attack simply overwrite the defender.
         legal_moves = self._opponent_moves(board, player)
         if not legal_moves:
-            return 10.0 # Huge win for bot
+            return V_MAX  # Win: the top of the network's value scale
         sims = [self._simulate_opponent_move(board, move) for move in legal_moves]
         values = DQN_adapter.get_state_evaluations(sims, 3 - player)
         order = sorted(range(len(sims)), key=lambda i: values[i])
@@ -215,7 +218,7 @@ class ExpectamaxSearch:
             
         legal_moves = DQN_adapter._get_gui_legal_moves(board, player)
         if not legal_moves:
-            return -10.0 # Loss
+            return V_MIN  # Loss: the bottom of the network's value scale
             
         expected_q = self._get_expected_q(board, DQN_adapter, player)  # the mover's own view
         move_scores = []
@@ -242,7 +245,7 @@ class ExpectamaxSearch:
         with torch.no_grad():
             log_probs = self.agent.q_network(state_tensor.unsqueeze(0))
             probs = log_probs.exp()
-            support = self.agent.support if hasattr(self.agent, 'support') else torch.linspace(-10, 10, 51).to(self.device)
+            support = self.agent.support if hasattr(self.agent, 'support') else torch.linspace(V_MIN, V_MAX, NUM_ATOMS).to(self.device)
             expected_q = (probs * support).sum(dim=2).squeeze(0)
         return expected_q
 
@@ -540,12 +543,14 @@ class DQNBotLogic:
 
     def _get_state_representation(self, gui_board, player_id: int = None) -> torch.Tensor:
         """Network input for `player_id` (default: the bot) in that side's canonical frame, with
-        the same 30 planes the training environment gives (see GuiObservation). The bot's AAREN
+        the same 32 planes the training environment gives (see GuiObservation). The bot's AAREN
         history only describes the bot's opponent, so other views get none."""
         player_id = self.player_id if player_id is None else player_id
         observation = GuiObservation(
             board=self._gui_board_to_marq_grid(gui_board, player_id),
             own_revealed=self._own_revealed_mask(gui_board, player_id),
+            moved=self._moved_mask(gui_board, 'moved'),
+            long_moved=self._moved_mask(gui_board, 'long_moved'),
             turn_count=gui_board.turn_count,
             plies_since_battle=gui_board.plies_since_battle,
             max_turns=gui_board.max_turns,
@@ -553,6 +558,16 @@ class DQNBotLogic:
         )
         history = self.agent.history if player_id == self.player_id else None
         return self.agent.get_state_representation(observation, pbs_instance=history, player=player_id)
+
+    @staticmethod
+    def _moved_mask(gui_board, flag: str) -> np.ndarray:
+        """(10, 10) bool, both sides: the pieces that have moved ('moved') or made a long move."""
+        mask = np.zeros((10, 10), dtype=bool)
+        for r in range(10):
+            for c in range(10):
+                piece = gui_board.get((r, c))
+                mask[r, c] = bool(piece and getattr(piece, flag, False))
+        return mask
 
     @staticmethod
     def _own_revealed_mask(gui_board, viewer: int) -> np.ndarray:

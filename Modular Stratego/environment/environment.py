@@ -79,6 +79,10 @@ class StrategoEnvironment:
         """New game. starting_player (1 or -1) moves first."""
         assert starting_player in (1, -1), starting_player
         self.board.reset()
+        # Per square, both sides: the piece there has moved / has moved more than one square at
+        # once. Public information, read by observation planes 30-31 for the hidden enemy pieces.
+        self.moved = torch.zeros(BOARD_SIZE, BOARD_SIZE, dtype=torch.bool, device=self.device)
+        self.long_moved = torch.zeros(BOARD_SIZE, BOARD_SIZE, dtype=torch.bool, device=self.device)
         self.current_player = starting_player
         self.game_over = False
         self.winner = None
@@ -233,6 +237,7 @@ class StrategoEnvironment:
             return self._get_game_state(), -1.0, True, {"winner": 0, "win_type": "timeout", "revealed_in_step": [], "game_phase": "end", "turn_count": self.turn_count}
 
         (r_from, c_from), (r_to, c_to) = action
+        long_move = abs(r_to - r_from) + abs(c_to - c_from) > 1
         
         # Get pieces involved in the move
         actual_board = self.board.actual_board
@@ -274,6 +279,7 @@ class StrategoEnvironment:
             
             if result == 1:  # Attacker wins
                 self.board.move_piece(self.current_player, (r_from, c_from), (r_to, c_to))
+                self._track_move((r_from, c_from), (r_to, c_to), long_move)
                 
                 if hasattr(self, '_cached_piece_counts'):
                     self._cached_piece_counts[-self.current_player] = max(0, self._cached_piece_counts[-self.current_player] - 1)
@@ -292,6 +298,7 @@ class StrategoEnvironment:
                         
             elif result == -1:  # Defender wins (attacker loses piece)
                 actual_board[r_from, c_from] = EMPTY_SQUARE
+                self.moved[r_from, c_from] = self.long_moved[r_from, c_from] = False
                 if self.current_player == 1:
                     self.board.visible_board_p1[r_from, c_from] = EMPTY_SQUARE
                     self.board.visible_board_p2[r_from, c_from] = EMPTY_SQUARE
@@ -311,6 +318,8 @@ class StrategoEnvironment:
             else:  # Both pieces die (mutual destruction)
                 actual_board[r_from, c_from] = EMPTY_SQUARE
                 actual_board[r_to, c_to] = EMPTY_SQUARE
+                for sq in ((r_from, c_from), (r_to, c_to)):
+                    self.moved[sq] = self.long_moved[sq] = False
                 for p_board in [self.board.visible_board_p1, self.board.visible_board_p2]:
                     p_board[r_from, c_from] = EMPTY_SQUARE
                     p_board[r_to, c_to] = EMPTY_SQUARE
@@ -332,6 +341,7 @@ class StrategoEnvironment:
         else:
             # Simple move (no battle)
             self.board.move_piece(self.current_player, (r_from, c_from), (r_to, c_to))
+            self._track_move((r_from, c_from), (r_to, c_to), long_move)
             self.plies_since_battle += 1
 
         self.turn_count += 1
@@ -377,6 +387,12 @@ class StrategoEnvironment:
         }
         
         return self._get_game_state(), 0.0, self.game_over, info
+
+    def _track_move(self, src, dst, long_move: bool):
+        """Carry the moved flags of the piece on src to dst (the piece now on dst has moved)."""
+        self.long_moved[dst] = bool(self.long_moved[src]) or long_move
+        self.moved[dst] = True
+        self.moved[src] = self.long_moved[src] = False
 
     def _check_game_end(self):
         # Checks for game-ending conditions.
@@ -516,6 +532,8 @@ class StrategoEnvironment:
             max_turns=self.max_turns,
             observability=float(min(max(observability, 0.0), 1.0)),
             own_revealed=own_revealed,
+            moved=self.moved.clone(),
+            long_moved=self.long_moved.clone(),
             game_over=self.game_over,
             winner=self.winner,
             move_history=self.move_history.copy() if len(self.move_history) < 1000 else self.move_history[-100:],  # Only copy recent moves if history is long

@@ -14,6 +14,9 @@ import torch.nn.functional as F
 import numpy as np
 import random
 import math
+import copy
+import contextlib
+import threading
 from collections import deque, namedtuple
 from typing import List, Tuple, Optional, Dict
 from tqdm import tqdm
@@ -25,14 +28,16 @@ from network.networks import NoisyLinear, RainbowDQN
 from network.history_aggregator import HistoryAggregator
 from network.aaren import PieceActionAaren
 
-from network.prioritized_memory import StandardReplayBuffer, PrioritizedReplayBuffer, NStepBuffer, Experience
+from network.prioritized_memory import (StandardReplayBuffer, PrioritizedReplayBuffer, NStepBuffer, Experience,
+                                        DemonstrationBuffer)
 
 # Heuristic Action Filter for Top-100 move selection
 from environment.heuristic_filter import HeuristicMoveFilter
 
-# Lossless 3600-action encoding and 30 observation planes, both in the mover's canonical frame
+# Lossless 3600-action encoding and 32 observation planes, both in the mover's canonical frame
 from environment.action_encoding import NUM_ACTIONS, encode_move, decode_action, mirror_action, legal_action_mask
-from environment.observation import NUM_OBS_PLANES, encode_observations, to_canonical
+from environment.observation import (NUM_OBS_PLANES, CH_ENEMY_KNOWN, NUM_RANKS, encode_observations,
+                                     to_canonical)
 
 # C51 Hyperparameters - CRITICAL FOR DISTRIBUTIONAL RL
 # Support range [-10, +10] with 51 atoms → 0.4 units/atom resolution.
@@ -40,8 +45,14 @@ from environment.observation import NUM_OBS_PLANES, encode_observations, to_cano
 # accumulated returns over 200+ steps stay within ±5.
 # γ=0.995 is intentional for long-horizon flag-capture planning;
 # the tighter support (vs old ±30) ensures shaping rewards are C51-visible.
-V_MIN = -10.0   # Tightened from -30 for finer C51 atom resolution (0.4/atom vs 1.2)
-V_MAX = 10.0    # Matches rescaled reward range (terminal ±1.0, accumulated shaping ±~5)
+# A return is the outcome (+1 / -1 / DRAW_REWARD) plus the PBRS shaping, which telescopes to
+# -Phi(s_0) with Phi in [-0.4, 1], so every return lies in [-2, 1.4] (formal_2: -1.54 to 0.71).
+# The thesis support was +-10 (0.4 per atom, for its non-potential shaping), which left a
+# capture's shaping (~0.02-0.05) a tenth of an atom.
+# formal_8: material weight 5, so Phi lies in [-5, 5] and every return in [-6, 6]; 0.24 per atom,
+# and a won exchange (~0.3 of shaping) now spans more than an atom.
+V_MIN = -6.0
+V_MAX = 6.0
 NUM_ATOMS = 51
 
 
@@ -197,7 +208,7 @@ class RainbowAgent:
         self.noisy_acting = not inference_only
         
         # Rainbow Networks
-        # 30 observation planes (+ HISTORY_EMBEDDING_SIZE AAREN planes when AAREN_ENABLED)
+        # 32 observation planes (+ HISTORY_EMBEDDING_SIZE AAREN planes when AAREN_ENABLED)
         self.input_channels = NUM_OBS_PLANES + self.history_embedding_size
         self.q_network = RainbowDQN(input_shape=(self.input_channels, 10, 10), output_size=action_size, num_atoms=self.num_atoms).to(device)
         self.target_network = RainbowDQN(input_shape=(self.input_channels, 10, 10), output_size=action_size, num_atoms=self.num_atoms).to(device)
@@ -398,6 +409,92 @@ class RainbowAgent:
         # Cache for state tensors (to avoid redundant computation in remember_batch)
         self._cached_state_tensor = None  # Cached from act_batch
 
+        # Cold start from demonstrations (DQfD): enable_demonstrations() makes the buffer;
+        # remember_batch writes to it instead of the replay memory while recording_demos is set
+        self.demo_memory = None
+        self.recording_demos = False
+        try:
+            from settings.training_config import (COLD_START_DEMO_RATIO, COLD_START_DEMO_DECAY_EPISODES,
+                                                  COLD_START_MARGIN, COLD_START_MARGIN_WEIGHT)
+        except ImportError:
+            COLD_START_DEMO_RATIO, COLD_START_DEMO_DECAY_EPISODES = 0.0, 0
+            COLD_START_MARGIN, COLD_START_MARGIN_WEIGHT = 0.0, 0.0
+        self.demo_ratio = COLD_START_DEMO_RATIO
+        self.demo_decay_episodes = COLD_START_DEMO_DECAY_EPISODES
+        self.demo_margin = COLD_START_MARGIN
+        self.demo_margin_weight = COLD_START_MARGIN_WEIGHT
+        self._last_margin_loss = 0.0
+        from settings.training_config import REVEALED_ATTACK_PRIORITY, MEAN_LOSS_WEIGHT
+        self.revealed_attack_priority = REVEALED_ATTACK_PRIORITY
+        self.mean_loss_weight = MEAN_LOSS_WEIGHT
+
+        # Asynchronous learner (network/training/async_learner.py): enable_async() gives acting
+        # its own copy of the network and puts the replay memory behind a lock
+        self.acting_network = None
+        self.acting_lock = None
+        self.memory_lock = None
+
+    @property
+    def last_margin_loss(self) -> float:
+        """Large-margin loss of the latest update (0 without demonstrations in the batch)."""
+        return float(self._last_margin_loss)
+
+    def enable_async(self):
+        """Prepare for replay() on another thread. Acting reads acting_network, a copy of
+        q_network that sync_acting_network() refreshes; the optimizer changes q_network in place
+        and NoisyNet acting switches the network's noise and mode, so the two must not share it.
+        The replay memory, which both threads use, goes behind memory_lock."""
+        self.acting_network = copy.deepcopy(self.q_network)
+        self.acting_lock = threading.Lock()
+        self.memory_lock = threading.Lock()
+
+    def sync_acting_network(self):
+        """Copy the learner's weights into the acting network (async mode)."""
+        if self.acting_network is None:
+            return
+        with self.acting_lock:
+            with torch.no_grad():
+                for dst, src in zip(self.acting_network.parameters(), self.q_network.parameters()):
+                    dst.copy_(src)
+                for dst, src in zip(self.acting_network.buffers(), self.q_network.buffers()):
+                    dst.copy_(src)
+            if self.device.type == 'cuda':
+                torch.cuda.current_stream(self.device).synchronize()  # the copy is done before acting reads it
+
+    @contextlib.contextmanager
+    def _memory_access(self):
+        """Hold memory_lock (async mode). The learner runs on its own CUDA stream: it first waits
+        for the default stream (the acting thread's stores), and finishes its reads before the
+        lock is let go, so a transition the acting thread evicts is never freed mid-read."""
+        if self.memory_lock is None:
+            yield
+            return
+        with self.memory_lock:
+            on_side_stream = (self.device.type == 'cuda' and
+                              torch.cuda.current_stream(self.device) != torch.cuda.default_stream(self.device))
+            if on_side_stream:
+                torch.cuda.current_stream(self.device).wait_stream(torch.cuda.default_stream(self.device))
+            yield
+            if on_side_stream:
+                torch.cuda.current_stream(self.device).synchronize()
+
+    def _acting_context(self):
+        return self.acting_lock if self.acting_lock is not None else contextlib.nullcontext()
+
+    def enable_demonstrations(self, capacity: int):
+        """Make the (empty) demonstration buffer; its transitions are mixed into every batch."""
+        self.demo_memory = DemonstrationBuffer(capacity, device=self.device)
+
+    def current_demo_ratio(self) -> float:
+        """Share of each batch drawn from the demonstrations: demo_ratio, falling linearly to 0 over
+        demo_decay_episodes training episodes (0: it stays at demo_ratio). The demonstrator is a
+        scripted heuristic, not an expert, so its pull on the policy is let go of."""
+        if not self.demo_memory:
+            return 0.0
+        if self.demo_decay_episodes <= 0:
+            return self.demo_ratio
+        return self.demo_ratio * max(0.0, 1.0 - self.current_episode / self.demo_decay_episodes)
+
 
     def reset(self):
         """Reset the agent"""
@@ -483,31 +580,45 @@ class RainbowAgent:
     # Backward compatibility alias
     enable_pbs = enable_history
 
+    @staticmethod
+    def _per_priorities(m, log_p):
+        """PER priority of each row: KL(m || p) = CE(m, p) - H(m) of the projected target m and the
+        predicted log-distribution log_p of the action taken (0 when the prediction is the target)."""
+        with torch.no_grad():
+            ce = -(m * log_p).sum(dim=1)
+            return (ce + torch.special.xlogy(m, m).sum(dim=1)).clamp_min(0.0)
+
     def update_target_network(self):
         """Copy the online network into the target network. (The thesis code soft-updated with
-        tau=0.001 from a different random network, so the target stayed close to its random init.)"""
+        tau=0.001 from a different random network, so the target stayed close to its random init.)
+        The target network is never trained, so it stays in eval mode: no dropout in the targets
+        (the attention block's dropout 0.1 was on, a second source of noise in every target),
+        with its own NoisyNet noise kept on as in Rainbow."""
         self.target_network.load_state_dict(self.q_network.state_dict())
+        self.target_network.eval()
+        self.target_network.set_noise(True)
 
     def _q_forward_for_acting(self, state_tensor):
         """Log-probabilities for acting: eval mode (BatchNorm running statistics, no dropout),
         with freshly sampled NoisyNet noise when noisy_acting."""
-        net = self.q_network
-        net.eval()
-        if self.noisy_acting:
-            net.set_noise(True)
-            net.reset_noise()
-        try:
-            with torch.no_grad():
-                with torch.amp.autocast('cuda', enabled=self.amp_enabled):
-                    return net(state_tensor)
-        finally:
-            net.set_noise(False)
-            net.train()
+        net = self.acting_network if self.acting_network is not None else self.q_network
+        with self._acting_context():
+            net.eval()
+            if self.noisy_acting:
+                net.set_noise(True)
+                net.reset_noise()
+            try:
+                with torch.no_grad():
+                    with torch.amp.autocast('cuda', enabled=self.amp_enabled):
+                        return net(state_tensor)
+            finally:
+                net.set_noise(False)
+                net.train()
         
     def get_state_representation(self, board, pbs_instance=None, full_observability=False, player=None):
         """
         Network input for one position, in the viewer's canonical frame (Player 2 rotated 180
-        degrees): the 30 observation planes of environment/observation.py, followed by the
+        degrees): the 32 observation planes of environment/observation.py, followed by the
         AAREN history embedding planes when AAREN_ENABLED (zeros without a history instance).
 
         Args:
@@ -521,7 +632,7 @@ class RainbowAgent:
         return self._with_history_planes(obs.unsqueeze(0), [pbs_instance], player)[0]
 
     def _with_history_planes(self, obs, histories, player=None):
-        """Append the AAREN embedding planes (canonical frame) to a (B, 30, 10, 10) batch."""
+        """Append the AAREN embedding planes (canonical frame) to a (B, 32, 10, 10) batch."""
         if not self.history_embedding_size:
             return obs
         player = self.player_id if player is None else player
@@ -544,7 +655,7 @@ class RainbowAgent:
 
     def get_board_only_representation(self, board):
         """
-        The 30 observation planes only (no AAREN planes), canonical frame.
+        The 32 observation planes only (no AAREN planes), canonical frame.
 
         Used for replay buffer storage. AAREN embeddings are stored as history snapshots and
         added at replay time.
@@ -552,12 +663,12 @@ class RainbowAgent:
         Args:
             board: GameState or bare board
         Returns:
-            Tensor of shape (30, 10, 10)
+            Tensor of shape (32, 10, 10)
         """
         return encode_observations([board], self.player_id, device=self.device)[0]
 
     def get_batch_board_only_representation(self, states):
-        """(B, 30, 10, 10) observation planes for a batch of GameStates or bare boards."""
+        """(B, 32, 10, 10) observation planes for a batch of GameStates or bare boards."""
         return encode_observations(list(states), self.player_id, device=self.device)
 
     def remember(self, state, action, reward, next_state, done):
@@ -569,7 +680,7 @@ class RainbowAgent:
         self._add_experience(state_processed, action, reward, next_state_processed, done)
 
     def _add_experience(self, state, action, reward, next_state, done, is_battle=False,
-                         history_snapshot=None, next_history_snapshot=None, next_legal=None):
+                         history_snapshot=None, next_history_snapshot=None, next_legal=None, legal=None):
         """
         Internal helper to add experience to memory with potential augmentation.
         Always expects 'state' and 'next_state' to be processed tensors.
@@ -581,6 +692,9 @@ class RainbowAgent:
             next_history_snapshot: AAREN history snapshot for next_state
             next_legal: packed legal-action mask of next_state (pack_legal_mask), None if unknown;
                 dropped for terminal transitions, which do not bootstrap
+            legal: packed legal-action mask of state (demonstrations only: the margin loss)
+
+        While recording_demos is set the transition (and its flip) goes to demo_memory instead.
         """
         if done:
             next_legal = None
@@ -594,14 +708,33 @@ class RainbowAgent:
         # Clip reward to C51 support range to avoid instability
         reward_clipped = max(self.v_min, min(self.v_max, reward))
         
+        with self._memory_access():
+            self._store(state, action_idx, reward_clipped, next_state, done, is_battle, history_snapshot,
+                        next_history_snapshot, next_legal, legal)
+
+    def _store(self, state, action_idx, reward_clipped, next_state, done, is_battle, history_snapshot,
+               next_history_snapshot, next_legal, legal):
+        """The writes of _add_experience (see there)."""
         # SELF-IMITATION LEARNING: Detect winning experiences for priority boost
         # Win rewards are now ±1.0, so use 0.8 as threshold
         is_winning_experience = (reward_clipped >= 0.8 and done)
-        
+
+        if self.recording_demos:
+            self.demo_memory.add(state, action_idx, reward_clipped, next_state, done, next_legal=next_legal, legal=legal)
+            if self.aug_enabled and "flip" in self.aug_types:
+                self.demo_memory.add(torch.flip(state, [2]), mirror_action(action_idx), reward_clipped,
+                                     torch.flip(next_state, [2]), done,
+                                     next_legal=mirror_packed_mask(next_legal) if next_legal is not None else None,
+                                     legal=mirror_packed_mask(legal) if legal is not None else None)
+            return
+
         # Pass priority boost flags and history snapshots to PER
-        if hasattr(self.memory, 'add') and 'is_winning_experience' in self.memory.add.__code__.co_varnames:
-            self.memory.add(state, action_idx, reward_clipped, next_state, done,
-                          is_winning_experience=is_winning_experience, is_battle=is_battle,
+        boosts = hasattr(self.memory, 'add') and 'is_winning_experience' in self.memory.add.__code__.co_varnames
+        boost = dict(is_winning_experience=is_winning_experience, is_battle=is_battle) if boosts else {}
+        if boosts and self.revealed_attack_priority != 1.0 and self._attacks_revealed_piece(state, action_idx):
+            boost['boost'] = self.revealed_attack_priority  # the mirror attacks the same piece
+        if boosts:
+            self.memory.add(state, action_idx, reward_clipped, next_state, done, **boost,
                           history_snapshot=history_snapshot, next_history_snapshot=next_history_snapshot,
                           next_legal=next_legal)
         else:
@@ -611,6 +744,8 @@ class RainbowAgent:
         # 3. Add Augmented Experiences (without history snapshots — augmented states
         # don't have meaningful AAREN histories since positions are transformed). States and
         # action indices are both in the canonical frame, so the action is transformed there.
+        # The mirror gets the same priority boosts (the thesis code gave it none, so mirrored
+        # wins and battles were sampled 10x / 2.5x less often than the originals).
         if self.aug_enabled:
             # --- Horizontal Flip (Mirror): columns c -> 9 - c ---
             if "flip" in self.aug_types:
@@ -618,16 +753,26 @@ class RainbowAgent:
                 next_state_flip = torch.flip(next_state, [2])
                 next_legal_flip = mirror_packed_mask(next_legal) if next_legal is not None else None
                 self.memory.add(state_flip, mirror_action(action_idx), reward_clipped, next_state_flip, done,
-                                next_legal=next_legal_flip)
+                                next_legal=next_legal_flip, **boost)
                 self.step_count += 1
 
+    @staticmethod
+    def _attacks_revealed_piece(state, action_idx) -> bool:
+        """Whether action_idx (canonical frame) moves onto an enemy piece whose rank `state`
+        (observation planes, canonical frame) shows: planes 12-23 at the target square."""
+        move = decode_action(int(action_idx), 1)
+        if move is None or not isinstance(state, torch.Tensor) or state.dim() != 3:
+            return False
+        (_, _), (r, c) = move
+        return bool(state[CH_ENEMY_KNOWN:CH_ENEMY_KNOWN + NUM_RANKS, r, c].sum() > 0)
+
     def remember_batch(self, states, actions, rewards, next_states, dones, active_mask, game_states=None, next_game_states=None, infos=None,
-                       lane_ids=None, history_snapshots=None, next_legal_moves=None):
+                       lane_ids=None, history_snapshots=None, next_legal_moves=None, legal_moves=None):
         """
         Store multiple experiences efficiently with batched state processing.
         Uses N-step returns if enabled.
         
-        Stores the 30 observation planes + AAREN history snapshots (when AAREN is on).
+        Stores the 32 observation planes + AAREN history snapshots (when AAREN is on).
         
         Args:
             states: List of game states (boards)
@@ -645,6 +790,8 @@ class RainbowAgent:
                 lane's current history)
             next_legal_moves: this side's legal moves in each next state (the masked Double DQN
                 target picks its next action among them; None: any action)
+            legal_moves: this side's legal moves in each state (stored with demonstrations for the
+                margin loss; None: not stored)
         """
         if len(states) == 0:
             return
@@ -711,6 +858,9 @@ class RainbowAgent:
             next_legal = None
             if next_legal_moves is not None and next_legal_moves[i] and not dones[i]:
                 next_legal = pack_legal_mask(legal_action_mask(next_legal_moves[i], self.player_id))
+            legal = None
+            if legal_moves is not None and legal_moves[i]:
+                legal = pack_legal_mask(legal_action_mask(legal_moves[i], self.player_id))
 
             # Episode buffer: shadow-store every raw transition
             if self.episode_replay_enabled and self.episode_memory is not None:
@@ -728,31 +878,33 @@ class RainbowAgent:
                     state_tensors[i], action, reward, next_state_tensors[i], dones[i],
                     history_snapshot=history_snapshots[i],
                     next_history_snapshot=next_history_snapshots[i],
-                    next_legal=next_legal
+                    next_legal=next_legal, legal=legal, is_battle=is_battle
                 )
 
                 if n_step_result is not None:
-                    # Got n-step experience - add to replay via central helper
-                    # Note: For n-step, we boost priority if ANY step in the sequence had a battle
-                    n_state, n_action, n_reward, n_next_state, n_done, n_hist, n_next_hist, n_legal = n_step_result
+                    # Got n-step experience - add to replay via central helper. The battle boost
+                    # goes with the window's first move, the action that started the battle (the
+                    # thesis code gave it to the window that started n-1 moves before the battle)
+                    n_state, n_action, n_reward, n_next_state, n_done, n_hist, n_next_hist, n_legal, n_first_legal, n_battle = n_step_result
                     self._add_experience(n_state, n_action, n_reward, n_next_state, n_done,
-                                         is_battle=is_battle, history_snapshot=n_hist,
-                                         next_history_snapshot=n_next_hist, next_legal=n_legal)
+                                         is_battle=n_battle, history_snapshot=n_hist,
+                                         next_history_snapshot=n_next_hist, next_legal=n_legal, legal=n_first_legal)
                 
                 # Flush remaining if episode done
                 if dones[i]:
                     remaining = self.n_step_buffers[lane].flush()
                     for result in remaining:
-                        n_state, n_action, n_reward, n_next_state, n_done, n_hist, n_next_hist, n_legal = result
+                        n_state, n_action, n_reward, n_next_state, n_done, n_hist, n_next_hist, n_legal, n_first_legal, n_battle = result
                         self._add_experience(n_state, n_action, n_reward, n_next_state, n_done,
-                                             is_battle=is_battle, history_snapshot=n_hist,
-                                             next_history_snapshot=n_next_hist, next_legal=n_legal)
+                                             is_battle=n_battle, history_snapshot=n_hist,
+                                             next_history_snapshot=n_next_hist, next_legal=n_legal, legal=n_first_legal)
                     self.n_step_buffers[lane].reset()
             else:
                 # Standard 1-step: add directly using central helper
                 self._add_experience(state_tensors[i], action, reward, next_state_tensors[i], dones[i],
                                      is_battle=is_battle, history_snapshot=history_snapshots[i],
-                                     next_history_snapshot=next_history_snapshots[i], next_legal=next_legal)
+                                     next_history_snapshot=next_history_snapshots[i], next_legal=next_legal,
+                                     legal=legal)
             
             # Episode buffer: finalize episode on done
             if dones[i] and self.episode_replay_enabled and self.episode_memory is not None:
@@ -1087,14 +1239,22 @@ class RainbowAgent:
     # Backward compatibility alias
     train_pbs = train_history
 
-    def replay(self, batch_size=None, episode=None) -> Optional[float]:
+    def replay(self, batch_size=None, episode=None, demo_only=False) -> Optional[float]:
         """
         Train the Rainbow model using C51 Distributional Loss.
         Supports PER and N-step returns. Enforces warmup period.
-        
+
+        With demonstrations (enable_demonstrations), current_demo_ratio() of the batch comes from
+        them and their rows also get the large-margin loss of DQfD (Hester et al. 2018):
+        max over legal a of [Q(s, a) + margin * (a != a_E)] - Q(s, a_E), which is zero once the
+        demonstrated action a_E is valued at least `margin` above every other legal move. The
+        C51 loss alone would only learn what the demonstrator's moves are worth, not that they
+        are better than the moves it did not play.
+
         Args:
             batch_size: Override batch size
             episode: Current episode number (for PER beta annealing)
+            demo_only: the whole batch from the demonstrations (pre-training before any games)
         """
         if batch_size is None:
             batch_size = self.batch_size
@@ -1105,7 +1265,10 @@ class RainbowAgent:
         except ImportError:
             WARMUP_STEPS = 0
         
-        if len(self.memory) < max(batch_size, WARMUP_STEPS):
+        if demo_only:
+            if not self.demo_memory or len(self.demo_memory) < batch_size:
+                return None
+        elif len(self.memory) < max(batch_size, WARMUP_STEPS):
             return None
         
         # --- Sample Batch (PER or Standard) with ATARAXOS OVERSAMPLING ---
@@ -1114,63 +1277,100 @@ class RainbowAgent:
         weights = None
         self._per_priority_mask = None  # Reset per-call
         
+        n_demo = batch_size if demo_only else int(round(batch_size * self.current_demo_ratio()))
+        if n_demo and len(self.demo_memory) < n_demo:
+            n_demo = 0
         n_episode_samples = 0
-        if self.episode_replay_enabled and self.episode_memory is not None and self.episode_memory.num_episodes >= 5:
+        if (not demo_only and self.episode_replay_enabled and self.episode_memory is not None
+                and self.episode_memory.num_episodes >= 5):
             n_episode_samples = int(batch_size * self.episode_replay_mix_ratio)
-        n_per_samples = batch_size - n_episode_samples
+        n_per_samples = batch_size - n_episode_samples - n_demo
         
         # Determine sample size (oversample if advantage filtering enabled)
         sample_size = n_per_samples
         if self.advantage_filtering:
             sample_size = n_per_samples * self.oversample_factor
         
-        if self.per_enabled:
-            # Anneal beta
-            if episode is not None:
-                self.memory.anneal_beta(episode)
-            
-            sample_result = self.memory.sample(sample_size)
-            if sample_result is None:
-                return None
-            (states, actions, rewards, next_states, dones, indices, weights, hist_snapshots, next_hist_snapshots,
-             next_legal) = sample_result
-        else:
-            sample_result = self.memory.sample(sample_size)
-            if sample_result is None:
-                return None
-            states, actions, rewards, next_states, dones, next_legal = sample_result
-            hist_snapshots = [None] * states.size(0)
-            next_hist_snapshots = [None] * states.size(0)
+        with self._memory_access():  # sampling (async mode: the acting thread stores meanwhile)
+            if demo_only:
+                states, actions, rewards, next_states, dones, next_legal, state_legal = self.demo_memory.sample(n_demo)
+                hist_snapshots = [None] * n_demo
+                next_hist_snapshots = [None] * n_demo
+            elif self.per_enabled:
+                # Anneal beta
+                if episode is not None:
+                    self.memory.anneal_beta(episode)
+
+                sample_result = self.memory.sample(sample_size)
+                if sample_result is None:
+                    return None
+                (states, actions, rewards, next_states, dones, indices, weights, hist_snapshots, next_hist_snapshots,
+                 next_legal) = sample_result
+            else:
+                sample_result = self.memory.sample(sample_size)
+                if sample_result is None:
+                    return None
+                states, actions, rewards, next_states, dones, next_legal = sample_result
+                hist_snapshots = [None] * states.size(0)
+                next_hist_snapshots = [None] * states.size(0)
         
-        # --- Mix in Episode Segment Samples ---
-        if n_episode_samples > 0:
-            ep_result = self.episode_memory.sample_segments(n_episode_samples)
-            if ep_result is not None:
-                ep_states, ep_actions, ep_rewards, ep_next_states, ep_dones, ep_hists, ep_next_hists = ep_result
-                # Clip episode rewards to C51 support range
-                ep_rewards = ep_rewards.clamp(self.v_min, self.v_max)
-                # Concatenate with PER batch
-                states = torch.cat([states, ep_states], dim=0)
-                actions = torch.cat([actions, ep_actions], dim=0)
-                rewards = torch.cat([rewards, ep_rewards], dim=0)
-                next_states = torch.cat([next_states, ep_next_states], dim=0)
-                dones = torch.cat([dones, ep_dones], dim=0)
-                if next_legal is not None:  # episode segments carry no legal masks: any action
-                    next_legal = torch.cat([next_legal, torch.ones(ep_states.size(0), next_legal.size(1),
-                                                                   dtype=torch.bool, device=next_legal.device)])
-                # Extend history snapshot lists
-                hist_snapshots = list(hist_snapshots) + ep_hists
-                next_hist_snapshots = list(next_hist_snapshots) + ep_next_hists
-                # Extend PER weights with uniform weight for episode samples
+            # --- Mix in Episode Segment Samples ---
+            if n_episode_samples > 0:
+                ep_result = self.episode_memory.sample_segments(n_episode_samples)
+                if ep_result is not None:
+                    ep_states, ep_actions, ep_rewards, ep_next_states, ep_dones, ep_hists, ep_next_hists = ep_result
+                    # Clip episode rewards to C51 support range
+                    ep_rewards = ep_rewards.clamp(self.v_min, self.v_max)
+                    # Concatenate with PER batch
+                    states = torch.cat([states, ep_states], dim=0)
+                    actions = torch.cat([actions, ep_actions], dim=0)
+                    rewards = torch.cat([rewards, ep_rewards], dim=0)
+                    next_states = torch.cat([next_states, ep_next_states], dim=0)
+                    dones = torch.cat([dones, ep_dones], dim=0)
+                    if next_legal is not None:  # episode segments carry no legal masks: any action
+                        next_legal = torch.cat([next_legal, torch.ones(ep_states.size(0), next_legal.size(1),
+                                                                       dtype=torch.bool, device=next_legal.device)])
+                    # Extend history snapshot lists
+                    hist_snapshots = list(hist_snapshots) + ep_hists
+                    next_hist_snapshots = list(next_hist_snapshots) + ep_next_hists
+                    # Extend PER weights with uniform weight for episode samples
+                    if weights is not None:
+                        ep_weights = torch.ones(ep_states.size(0), device=weights.device)
+                        weights = torch.cat([weights, ep_weights], dim=0)
+                    # Extend PER indices with -1 sentinels for episode samples
+                    if indices is not None:
+                        indices = indices + [-1] * ep_states.size(0)
+
+            # --- Mix in Demonstrations (rows flagged in is_demo, with their states' legal masks) ---
+            is_demo = None
+            if demo_only:
+                is_demo = torch.ones(n_demo, dtype=torch.bool, device=states.device)
+            elif n_demo:
+                d_states, d_actions, d_rewards, d_next_states, d_dones, d_next_legal, d_legal = self.demo_memory.sample(n_demo)
+                n_own = states.size(0)
+                states = torch.cat([states, d_states.to(states.device)], dim=0)
+                actions = torch.cat([actions, d_actions.to(actions.device)], dim=0)
+                rewards = torch.cat([rewards, d_rewards.to(rewards.device)], dim=0)
+                next_states = torch.cat([next_states, d_next_states.to(next_states.device)], dim=0)
+                dones = torch.cat([dones, d_dones.to(dones.device)], dim=0)
+                if next_legal is not None or d_next_legal is not None:
+                    def full(mask, n):
+                        return mask if mask is not None else torch.ones(n, d_legal.size(1), dtype=torch.bool,
+                                                                        device=states.device)
+                    next_legal = torch.cat([full(next_legal, n_own).to(states.device),
+                                            full(d_next_legal, n_demo).to(states.device)])
+                state_legal = torch.cat([torch.ones(n_own, d_legal.size(1), dtype=torch.bool, device=states.device),
+                                         d_legal.to(states.device)])
+                is_demo = torch.arange(states.size(0), device=states.device) >= n_own
+                hist_snapshots = list(hist_snapshots) + [None] * n_demo
+                next_hist_snapshots = list(next_hist_snapshots) + [None] * n_demo
                 if weights is not None:
-                    ep_weights = torch.ones(ep_states.size(0), device=weights.device)
-                    weights = torch.cat([weights, ep_weights], dim=0)
-                # Extend PER indices with -1 sentinels for episode samples
+                    weights = torch.cat([weights, torch.ones(n_demo, device=weights.device)], dim=0)
                 if indices is not None:
-                    indices = indices + [-1] * ep_states.size(0)
+                    indices = list(indices) + [-1] * n_demo  # not PER entries: no priority update
         
         # --- AAREN EMBEDDING PLANES FROM STORED SNAPSHOTS ---
-        # Stored states are the 30 observation planes; with AAREN on, the network also reads
+        # Stored states are the 32 observation planes; with AAREN on, the network also reads
         # the embedding planes the agent saw when it acted (state) and will act on (next state).
         if self.history_embedding_size and states.size(1) == NUM_OBS_PLANES:
             with torch.no_grad():
@@ -1192,11 +1392,18 @@ class RainbowAgent:
         # Fresh NoisyNet noise for this update (online and target sample their own)
         self.q_network.reset_noise()
         self.target_network.reset_noise()
+        # The C51 loss needs the distribution of the action taken only, and the target that of the
+        # Double DQN action only, so those two passes stay logits and are normalized after the
+        # gather (the log-softmax over the atoms is per action). The full (batch, 3600, atoms)
+        # log-probabilities are built only for the regularizers and the filter that read them.
+        full_current = self.advantage_filtering or self.kl_reg_enabled or self.entropy_reg_enabled or self.dynamic_damping
         with torch.amp.autocast('cuda', enabled=self.amp_enabled):
-            current_log_probs = self.q_network(states)
+            current_logits = self.q_network.forward_logits(states)
             with torch.no_grad():
                 next_log_probs_online = self.q_network(next_states)
-                next_log_probs_target = self.target_network(next_states)
+                next_logits_target = self.target_network.forward_logits(next_states)
+        current_log_probs = F.log_softmax(current_logits.float(), dim=2) if full_current else None
+        next_log_probs_target = F.log_softmax(next_logits_target.float(), dim=2) if self.advantage_filtering else None
 
         # --- ATARAXOS ADVANTAGE FILTERING ---
         # Filter to top 25% by N-step TD error magnitude
@@ -1225,11 +1432,16 @@ class RainbowAgent:
                 dones = dones[top_k_indices]
                 if next_legal is not None:
                     next_legal = next_legal[top_k_indices]
+                if is_demo is not None:
+                    is_demo = is_demo[top_k_indices]
+                    state_legal = state_legal[top_k_indices]
 
                 # Apply filter efficiently to pre-computed tensors!
                 current_log_probs = current_log_probs[top_k_indices]
+                current_logits = current_logits[top_k_indices]
                 next_log_probs_online = next_log_probs_online[top_k_indices]
                 next_log_probs_target = next_log_probs_target[top_k_indices]
+                next_logits_target = next_logits_target[top_k_indices]
                 
                 if weights is not None:
                     weights = weights[top_k_indices]
@@ -1247,31 +1459,45 @@ class RainbowAgent:
             # that are legal there (the thesis code took the argmax over all 3600 actions)
             next_actions = self._double_dqn_next_actions(next_log_probs_online, next_legal) # (batch)
             
-            # 2. Get distribution of best action from Target Network using cached tensor
-            next_probs_target = next_log_probs_target.float().exp()
-            
-            # Gather distribution for the selected actions
-            # next_actions: (batch) -> (batch, 1, atoms)
-            next_action_probs = next_probs_target.gather(1, next_actions.view(-1, 1, 1).expand(-1, -1, self.num_atoms)).squeeze(1)
+            # 2. Target Network distribution of the selected actions: gather (batch, 1, atoms), then softmax
+            next_action_probs = F.softmax(
+                next_logits_target.gather(1, next_actions.view(-1, 1, 1).expand(-1, -1, self.num_atoms)).squeeze(1).float(),
+                dim=1)
             
             # 3. Project Distribution (Categorical Algorithm)
             m = self._project_distribution(next_action_probs, rewards, dones, gamma_to_use)
             
         # --- Calculate Loss ---
-        # Current log probabilities are already computed and filtered in current_log_probs
+        # Log-probabilities of the actions taken: gather the logits (batch, 1, atoms), then log-softmax
+        action_log_probs = F.log_softmax(
+            current_logits.gather(1, actions.view(-1, 1, 1).expand(-1, -1, self.num_atoms)).squeeze(1).float(), dim=1)
         
-        # Gather log probs for the actions taken
-        # actions: (batch) -> (batch, 1, atoms)
-        action_log_probs = current_log_probs.gather(1, actions.view(-1, 1, 1).expand(-1, -1, self.num_atoms)).squeeze(1)
-        
-        # Calculate element-wise loss (for PER priority updates)
+        # Element-wise cross-entropy (the loss)
         elementwise_loss = -(m * action_log_probs).sum(dim=1)
-        
+        # Plus the squared error of the means (MEAN_LOSS_WEIGHT): the cross-entropy fits the
+        # whole distribution and learns small differences of the mean very slowly
+        if self.mean_loss_weight:
+            mean_error = (action_log_probs.exp() * self.support).sum(dim=1) - (m * self.support).sum(dim=1)
+            loss_per_sample = elementwise_loss + self.mean_loss_weight * mean_error ** 2
+        else:
+            loss_per_sample = elementwise_loss
+
         # Apply importance sampling weights if PER
         if weights is not None:
-            c51_loss = (weights * elementwise_loss).mean()
+            c51_loss = (weights * loss_per_sample).mean()
         else:
-            c51_loss = elementwise_loss.mean()
+            c51_loss = loss_per_sample.mean()
+
+        # --- LARGE-MARGIN LOSS ON THE DEMONSTRATIONS (DQfD) ---
+        margin_loss = torch.tensor(0.0, device=self.device)
+        if is_demo is not None and self.demo_margin_weight and bool(is_demo.any()):
+            rows = is_demo.nonzero(as_tuple=True)[0]
+            q = (F.softmax(current_logits[rows].float(), dim=2) * self.support).sum(dim=2)  # (demos, actions)
+            demo_actions = actions[rows].view(-1, 1)
+            margins = torch.full_like(q, self.demo_margin).scatter_(1, demo_actions, 0.0)
+            best = (q + margins).masked_fill(~state_legal[rows], float('-inf')).max(dim=1).values
+            margin_loss = (best - q.gather(1, demo_actions).squeeze(1)).mean()
+        self._last_margin_loss = margin_loss.detach()
         
         # --- KL-REGULARIZATION (Anti-Cycling) ---
         kl_loss = torch.tensor(0.0, device=self.device)
@@ -1323,7 +1549,8 @@ class RainbowAgent:
             target_kl_loss = beta_t * (target_probs * (target_log_probs - current_log_probs)).sum(dim=2).mean()
         
         # --- TOTAL LOSS ---
-        loss = c51_loss + self.kl_reg_weight * kl_loss - entropy_bonus + magnet_loss + target_kl_loss
+        loss = (c51_loss + self.kl_reg_weight * kl_loss - entropy_bonus + magnet_loss + target_kl_loss
+                + self.demo_margin_weight * margin_loss)
         
         # Update reference network periodically (much slower than target)
         if self.kl_reg_enabled:
@@ -1338,23 +1565,27 @@ class RainbowAgent:
              self.optimizer.zero_grad(set_to_none=True)
              return None
         
-        # Update PER priorities with TD-errors
+        # Update PER priorities with the KL divergence KL(m || p) = CE - H(m), as in Rainbow. (The
+        # thesis code used the cross-entropy, which adds the entropy of the target: about the same
+        # for every transition, so the priorities were nearly uniform and the outcome-carrying
+        # transitions were not replayed more often.)
         if self.per_enabled and indices is not None and len(indices) > 0:
-            td_errors = elementwise_loss.detach().cpu().numpy()
-            # If advantage filtering mixed PER + episode samples, slice to PER-only entries
-            if hasattr(self, '_per_priority_mask') and self._per_priority_mask is not None:
-                td_errors = td_errors[self._per_priority_mask]
-                self._per_priority_mask = None  # Reset for next call
-            # Filter out -1 sentinel indices (episode replay samples that bypass PER)
-            valid_mask = [i for i, idx in enumerate(indices) if idx >= 0]
-            if valid_mask:
-                filtered_indices = [indices[i] for i in valid_mask]
-                filtered_td = td_errors[valid_mask] if len(valid_mask) < len(td_errors) else td_errors
-                # Safety: ensure lengths match
-                if len(filtered_indices) == len(filtered_td):
-                    self.memory.update_priorities(filtered_indices, filtered_td)
-                elif len(filtered_indices) < len(filtered_td):
-                    self.memory.update_priorities(filtered_indices, filtered_td[:len(filtered_indices)])
+            td_errors = self._per_priorities(m, action_log_probs).cpu().numpy()  # waits for the GPU: outside the lock
+            with self._memory_access():
+                # If advantage filtering mixed PER + episode samples, slice to PER-only entries
+                if hasattr(self, '_per_priority_mask') and self._per_priority_mask is not None:
+                    td_errors = td_errors[self._per_priority_mask]
+                    self._per_priority_mask = None  # Reset for next call
+                # Filter out -1 sentinel indices (episode replay samples that bypass PER)
+                valid_mask = [i for i, idx in enumerate(indices) if idx >= 0]
+                if valid_mask:
+                    filtered_indices = [indices[i] for i in valid_mask]
+                    filtered_td = td_errors[valid_mask] if len(valid_mask) < len(td_errors) else td_errors
+                    # Safety: ensure lengths match
+                    if len(filtered_indices) == len(filtered_td):
+                        self.memory.update_priorities(filtered_indices, filtered_td)
+                    elif len(filtered_indices) < len(filtered_td):
+                        self.memory.update_priorities(filtered_indices, filtered_td[:len(filtered_indices)])
              
         self.optimizer.zero_grad(set_to_none=True)
         
@@ -1538,20 +1769,25 @@ class RainbowAgent:
 
     def get_average_q(self) -> float:
         """
-        Get average Q-value from recent replay buffer samples.
+        Average Q-value of the actions taken in a sample of replay transitions.
         Returns 0.0 if no experiences are available.
+
+        (The thesis metric took the max over all 3600 actions, nearly all of them illegal in the
+        state and never trained, so it read about +2 while the returns were about -1.)
         """
         if len(self.memory) < self.batch_size:
             return 0.0
             
         try:
             # Sample a small batch to estimate average Q
-            sample_data = self.memory.sample(min(64, len(self.memory)))
+            with self._memory_access():
+                sample_data = self.memory.sample(min(64, len(self.memory)))
             
             if sample_data is None:
                 return 0.0
-            states = sample_data[0]  # every sample format starts with the states
-            
+            states, actions = sample_data[0], sample_data[1]  # every sample format starts with these
+            actions = torch.as_tensor(actions, device=self.device).long().view(-1, 1)
+
             # PERF: Zero-pad instead of reconstructing AAREN — this is a diagnostic
             # metric, exact embeddings aren't needed for a Q-value estimate.
             if self.history_embedding_size and states.size(1) == NUM_OBS_PLANES:
@@ -1559,15 +1795,15 @@ class RainbowAgent:
                                       device=self.device)
                 states = torch.cat([states, padding], dim=1)
             
-            self.q_network.eval()
-            with torch.no_grad():
-                log_probs = self.q_network(states)
-                probs = log_probs.exp()
-                expected_q = (probs * self.support).sum(dim=2)  # (batch, actions)
-                # Get max Q for each state
-                max_q = expected_q.max(dim=1)[0]
-                avg_q = max_q.mean().item()
-            self.q_network.train()
+            net = self.acting_network if self.acting_network is not None else self.q_network
+            with self._acting_context():
+                net.eval()
+                with torch.no_grad():
+                    log_probs = net(states)
+                    probs = log_probs.exp()
+                    expected_q = (probs * self.support).sum(dim=2)  # (batch, actions)
+                    avg_q = expected_q.gather(1, actions).mean().item()
+                net.train()
             
             return avg_q
         except Exception:
@@ -1583,7 +1819,8 @@ class RainbowAgent:
             total_sigma = 0.0
             num_params = 0
             
-            for name, module in self.q_network.named_modules():
+            net = self.acting_network if self.acting_network is not None else self.q_network
+            for name, module in net.named_modules():
                 if isinstance(module, NoisyLinear):
                     # Get average sigma magnitude
                     sigma_w = module.weight_sigma.abs().mean().item()
@@ -1610,27 +1847,20 @@ class RainbowAgent:
             elif self.history and self.history.owns_aaren:
                 aaren_model = self.history.aaren
             
+            # Mean of the per-parameter gradient norms, kept as a GPU tensor: the getters convert it.
+            # (One .item() per parameter made every update wait on the GPU about 170 times.)
             if aaren_model is not None:
-                total_norm = 0.0
-                num_params = 0
-                for param in aaren_model.parameters():
-                    if param.grad is not None:
-                        total_norm += param.grad.norm().item()
-                        num_params += 1
-                self._cached_aaren_grad_norm = total_norm / max(num_params, 1)
-            
-            # Capture DQN gradient norm (for comparison)
-            total_dqn_norm = 0.0
-            num_dqn_params = 0
-            for param in self.q_network.parameters():
-                if param.grad is not None:
-                    total_dqn_norm += param.grad.norm().item()
-                    num_dqn_params += 1
-            self._cached_dqn_grad_norm = total_dqn_norm / max(num_dqn_params, 1)
+                self._cached_aaren_grad_norm = self._mean_grad_norm(aaren_model)
+            self._cached_dqn_grad_norm = self._mean_grad_norm(self.q_network)
             
         except Exception:
             pass  # Silently fail, keep previous values
-    
+
+    @staticmethod
+    def _mean_grad_norm(model):
+        norms = [p.grad.detach().norm() for p in model.parameters() if p.grad is not None]
+        return torch.stack(norms).mean() if norms else 0.0
+
     def get_aaren_grad_norm(self) -> float:
         """
         Get the cached AAREN gradient norm.
@@ -1643,14 +1873,14 @@ class RainbowAgent:
             return self.history._last_grad_norm
         
         # Fallback to the value captured during end-to-end replay (if applicable)
-        return getattr(self, '_cached_aaren_grad_norm', 0.0)
+        return float(getattr(self, '_cached_aaren_grad_norm', 0.0))
     
     def get_dqn_grad_norm(self) -> float:
         """
         Get the cached DQN network gradient norm (computed during replay).
         Useful for comparison with AAREN gradient norm.
         """
-        return getattr(self, '_cached_dqn_grad_norm', 0.0)
+        return float(getattr(self, '_cached_dqn_grad_norm', 0.0))
     
     def get_aaren_embedding_stats(self) -> dict:
         """

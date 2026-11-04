@@ -132,7 +132,7 @@ def test_a_side_with_no_legal_move_loses():
 
 
 class EncodingAgent:
-    """Stands in for RainbowAgent.get_state_representation with AAREN off: the 30 planes only."""
+    """Stands in for RainbowAgent.get_state_representation with AAREN off: the 32 planes only."""
     history = None
 
     def get_state_representation(self, board, pbs_instance=None, player=None):
@@ -140,7 +140,7 @@ class EncodingAgent:
 
 
 def test_the_gui_bots_input_is_the_environments_observation():
-    """All 30 planes, fog of war, with the limits the agent is evaluated under. Before this the
+    """All 32 planes (the moved flags too), fog of war, with the limits the agent is evaluated under. Before this the
     GUI bot left planes 26-29 at 0: it never knew which of its pieces the human had seen, and
     every position looked like the first move."""
     import dqn_bot_logic as D
@@ -156,7 +156,7 @@ def test_the_gui_bots_input_is_the_environments_observation():
         bot.player_id = OWNER[player]
         ours = bot._get_state_representation(gui, OWNER[player])
         theirs = encode_observations([state], player)[0]
-        assert torch.equal(ours, theirs), (env.turn_count, [i for i in range(30) if not torch.equal(ours[i], theirs[i])])
+        assert torch.equal(ours, theirs), (env.turn_count, [i for i in range(len(ours)) if not torch.equal(ours[i], theirs[i])])
         checked += 1
         if env.turn_count > 50:
             assert ours[CH_PROGRESS].max() > 0

@@ -1,10 +1,11 @@
-"""The network's view of the game: 30 planes in the mover's canonical frame.
+"""The network's view of the game: 32 planes in the mover's canonical frame.
 
 The thesis encoding had 15 planes and one plane for every enemy piece, so revealed enemy ranks
 were dropped (and full observability showed the network nothing more than fog of war).
 Plane layout (environment/observation.py):
     0-11 own by rank, 12-23 known enemy by rank, 24 unknown enemy, 25 lakes,
-    26 own pieces the enemy knows, 27 observability flag, 28 no-battle counter, 29 progress.
+    26 own pieces the enemy knows, 27 observability flag, 28 no-battle counter, 29 progress,
+    30 unknown enemy that has moved, 31 unknown enemy that has moved more than one square.
 """
 
 import torch
@@ -14,8 +15,9 @@ from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
 from environment.piece import PieceType
 
-NUM_PLANES = 30
+NUM_PLANES = 32
 OWN, ENEMY_KNOWN, ENEMY_HIDDEN, LAKE, OWN_REVEALED, OBSERVABILITY, NO_BATTLE, PROGRESS = 0, 12, 24, 25, 26, 27, 28, 29
+MOVED, LONG_MOVED = 30, 31
 
 
 def _agent(cpu, player=1):
@@ -26,7 +28,7 @@ def _rank_plane(base, piece_type):
     return base + piece_type.value - 1
 
 
-def test_observation_has_30_planes(cpu, tiny_network):
+def test_observation_has_32_planes(cpu, tiny_network):
     agent = _agent(cpu)
     x = agent.get_state_representation(StrategoEnvironment(cpu).reset())
     assert x.shape == (NUM_PLANES, 10, 10)
@@ -155,3 +157,49 @@ def test_own_revealed_mask_follows_direct_board_edits(cpu):
     r, c = 6, 0
     env.board.visible_board_p2[r, c] = env.board.actual_board[r, c]  # Player 2 now knows this piece
     assert env._get_game_state().own_revealed[r, c]
+
+
+def test_hidden_enemy_pieces_that_have_moved_are_marked(cpu, tiny_network):
+    """Planes 30-31: a piece that has moved is not a Bomb or the Flag, one that moved more than
+    one square at once is a Scout. Both are public, so they mark the unknown enemy pieces; the
+    flags follow the piece and go when it is taken. Checked against a tracker kept here."""
+    import random
+    rng = random.Random(5)
+    seen_moved = seen_long = 0
+    for game in range(4):
+        env = StrategoEnvironment(cpu, max_turns=400)
+        state = env.reset()
+        moved, long_moved = set(), set()
+        done = False
+        while not done:
+            moves = env.get_valid_moves()
+            if not moves:
+                break
+            long_moves = [m for m in moves if abs(m[1][0] - m[0][0]) + abs(m[1][1] - m[0][1]) > 1]
+            move = rng.choice(long_moves) if long_moves and rng.random() < 0.3 else rng.choice(moves)
+            (fr, to) = move
+            mover = env.board.actual_board[fr].item()
+            state, _, done, _ = env.step(move)
+            after = env.board.actual_board[to].item()
+            long = fr in long_moved or abs(to[0] - fr[0]) + abs(to[1] - fr[1]) > 1
+            moved.discard(fr); long_moved.discard(fr)
+            if after == mover:                 # moved, or won its battle
+                moved.add(to)
+                (long_moved.add if long else long_moved.discard)(to)
+            elif after == 0:                   # both pieces taken
+                moved.discard(to); long_moved.discard(to)
+            player = state.current_player
+            x = _agent(cpu, player).get_state_representation(state)
+            hidden = state.board == HIDDEN_PIECE
+            for plane, squares in ((MOVED, moved), (LONG_MOVED, long_moved)):
+                expected = torch.zeros(10, 10, dtype=torch.bool)
+                for sq in squares:
+                    expected[sq] = True
+                expected = (expected & hidden).float()
+                if player != 1:
+                    expected = expected.flip(0, 1)
+                assert torch.equal(x[plane], expected), (game, env.turn_count, plane)
+            seen_moved += int(x[MOVED].sum())
+            seen_long += int(x[LONG_MOVED].sum())
+            assert (x[MOVED] <= x[ENEMY_HIDDEN]).all() and (x[LONG_MOVED] <= x[MOVED]).all()
+    assert seen_moved > 0 and seen_long > 0

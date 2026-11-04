@@ -8,6 +8,7 @@ from typing import List, Dict, Tuple, Optional
 from stratego import Board, auto_setup, side_name, FILES, Piece, result_message
 
 from dqn_bot_logic import DQNBotLogic
+from network.drqn_agent import V_MAX  # the eval bar spans the network's value scale
 from setup_agent_integration import place_army
 
 pygame.init()
@@ -292,9 +293,9 @@ def draw_eval_bar():
     pygame.draw.rect(screen, GREY_800, (bar_x, bar_y, bar_w, bar_h), border_radius=6)
     
     # Value calculation (Dueling Head expected value from COACH BOT perspective)
-    val = max(-10.0, min(10.0, current_evaluation))
+    val = max(-V_MAX, min(V_MAX, current_evaluation))
     fill_pivot = bar_y + bar_h // 2
-    pixel_per_unit = (bar_h / 2) / 10.0
+    pixel_per_unit = (bar_h / 2) / V_MAX
     
     if val > 0:
         h = int(val * pixel_per_unit)

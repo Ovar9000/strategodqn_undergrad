@@ -232,6 +232,30 @@ def test_evaluation_games_are_counted_and_greedy(cpu, tiny_network):
     assert agent.noisy_acting  # restored afterwards
 
 
+def test_evaluation_games_run_side_by_side_and_each_side_moves_only_on_its_turn(cpu, monkeypatch):
+    from environment.curriculum import TrueRandomOpponent
+    from network.training import evaluation
+    calls = []
+
+    class Side(TrueRandomOpponent):
+        def act_batch(self, boards, valid_moves_list, game_states=None, **kwargs):
+            assert all(s.current_player == self.player_id for s in game_states)
+            calls.append((self.player_id, len(boards)))
+            return super().act_batch(boards, valid_moves_list, game_states)
+
+    original_step = evaluation.StrategoEnvironment.step
+
+    def legal_step(env, action):
+        assert tuple(map(tuple, action)) in {tuple(map(tuple, m)) for m in env.get_valid_moves()}
+        return original_step(env, action)
+
+    monkeypatch.setattr(evaluation.StrategoEnvironment, 'step', legal_step)
+    result = evaluation.play_evaluation_games(Side(cpu, 1), Side(cpu, -1), num_games=6, device=cpu, max_turns=40)
+    assert result['wins'] + result['losses'] + result['draws'] == 6
+    assert max(n for _, n in calls) == 3  # the starting player alternates: 3 games each side to move first
+    assert {p for p, _ in calls} == {1, -1}
+
+
 # ---------------------------------------------------------------- trainer wiring
 
 def test_trainer_evaluates_and_moves_through_the_phases(tmp_path, config_override, monkeypatch):
@@ -252,6 +276,32 @@ def test_trainer_evaluates_and_moves_through_the_phases(tmp_path, config_overrid
     assert evaluations and set(evaluations[0][1]) == {'random', 'heuristic'}
     state = json.load(open(tmp_path / 'models' / 'curriculum_state.json'))
     assert state['current_phase'] >= 2
+
+
+def test_the_stages_change_only_the_opponents(tmp_path, config_override, monkeypatch):
+    """The thesis curriculum gave Phase 1 full observability, its own turn limit and a per-phase
+    shaping weight, so each transition changed the game under the network. Every stage, and every
+    evaluation, now plays fog of war with the one turn limit."""
+    from .test_trainer_smoke import run_tiny_training
+    import train_dqn
+    from environment.parallel_environment import ParallelStrategoEnvironment
+    settings = []
+    for name in ('set_full_observability', 'set_max_turns'):
+        original = getattr(ParallelStrategoEnvironment, name)
+        monkeypatch.setattr(ParallelStrategoEnvironment, name,
+                            lambda self, v, _n=name, _o=original: (settings.append((_n, v)), _o(self, v))[1])
+    evals = []
+    original_eval = train_dqn.play_evaluation_games
+
+    def play(*args, **kwargs):
+        evals.append((kwargs['full_observability'], kwargs['max_turns']))
+        return original_eval(*args, **kwargs)
+
+    monkeypatch.setattr(train_dqn, 'play_evaluation_games', play)
+    run_tiny_training(tmp_path, config_override, monkeypatch, episodes=12,
+                      EVAL_INTERVAL=4, EVAL_GAMES=1, PHASE_1_MAX_EPISODES=4, PHASE_2_MAX_EPISODES=4)
+    assert settings and set(settings) == {('set_full_observability', False), ('set_max_turns', 40)}
+    assert evals and set(evals) == {(False, 40)}
 
 
 def test_self_play_does_not_overwrite_the_learning_agent2(tmp_path, config_override, monkeypatch):
@@ -315,3 +365,13 @@ def test_greedy_play_never_imitates_the_heuristic():
     for _ in range(200):
         agent.act_batch([state.board], [env.get_valid_moves()], [state], env_indices=[None])
     assert not calls
+
+
+def test_later_stages_keep_the_stage_one_opponents(tmp_path):
+    """formal_6: after the stage-1 cap the pool held only opponents it drew or lost against, and
+    the agent stopped attacking. Stages 2 and 3 keep random and the heuristic in the pool."""
+    for phase in (2, 3):
+        weights = _curriculum(tmp_path, phase=phase).get_opponent_distribution()
+        assert {'random', 'heuristic'} <= set(weights)
+        assert weights['random'] >= 0.15 - 1e-9
+        assert sum(weights.values()) == pytest.approx(1.0)

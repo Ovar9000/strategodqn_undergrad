@@ -1,12 +1,15 @@
 """
 Curriculum Learning Module for Stratego DQN Training
 
-Implements 5-phase curriculum with automatic phase transitions:
-- Phase 1: Physics of War (Full Observability)
-- Phase 2: Memory Gap (Partial Observability, Frozen Heuristic)
-- Phase 3: Self-Play (Nash Ascent)
-- Phase 4: League Training (Ensemble)
-- Phase 5: Scenario Drills (Endgame Specialization)
+An opponent schedule: the stages below choose only whom the agent plays. Every stage plays the
+same game (fog of war, one turn limit, one draw rule, constant reward shaping). The thesis
+curriculum also gave Phase 1 full observability and cut the shaping weight per phase, so each
+transition changed the environment under the network:
+- Stage 1: random and scripted heuristics
+- Stage 2: frozen heuristic and smart heuristic (with the stage-1 opponents kept in the pool)
+- Stage 3: self-play (Nash Ascent)
+- Stage 4: League Training (Ensemble)
+- Stage 5: Scenario Drills (Endgame Specialization)
 """
 
 import os
@@ -18,7 +21,6 @@ from enum import IntEnum
 
 from settings import training_config
 from settings.training_config import (
-    PHASE_MAX_TURNS, DEFAULT_MAX_TURNS,
     PHASE_1_WIN_THRESHOLD_RANDOM, PHASE_1_WIN_THRESHOLD_HEURISTIC,
     PHASE_2_WIN_THRESHOLD, PHASE_3_WIN_THRESHOLD
 )
@@ -31,8 +33,8 @@ PFSP_WINDOW = 100
 
 class TrainingPhase(IntEnum):
     """Training curriculum phases."""
-    PHYSICS_OF_WAR = 1      # Full observability, learn basics
-    MEMORY_GAP = 2          # Fog of war, use memory (PBS)
+    PHYSICS_OF_WAR = 1      # Scripted opponents, learn basics
+    MEMORY_GAP = 2          # Frozen and smart heuristics
     SELF_PLAY = 3           # Play against past self
     LEAGUE_TRAINING = 4     # Diverse opponent pool (the last phase of the sequence)
     SCENARIO_DRILLS = 5     # Endgame specialization (not part of the 1 -> 4 sequence)
@@ -63,13 +65,11 @@ def phase_episode_cap(phase) -> int:
 class PhaseConfig:
     """Configuration for a curriculum phase."""
     name: str
-    full_observability: bool
     min_episodes: int
     max_episodes: int
     opponents: List[str]
     reward_focus: str  # Which reward component to emphasize
     success_metrics: Dict[str, float]
-    max_turns: int = 0  # Max steps per episode (0 = use DEFAULT_MAX_TURNS)
 
 
 # PHASE CONFIGURATIONS
@@ -79,7 +79,6 @@ class PhaseConfig:
 PHASE_CONFIGS = {
     TrainingPhase.PHYSICS_OF_WAR: PhaseConfig(
         name="Physics of War",
-        full_observability=True,
         min_episodes=0,  # NOT ENFORCED - dynamic transition
         max_episodes=0,  # NOT ENFORCED - dynamic transition
         opponents=["random", "heuristic", "smart_heuristic"],
@@ -88,11 +87,9 @@ PHASE_CONFIGS = {
             "random": PHASE_1_WIN_THRESHOLD_RANDOM,
             "heuristic": PHASE_1_WIN_THRESHOLD_HEURISTIC
         },
-        max_turns=PHASE_MAX_TURNS.get(1, DEFAULT_MAX_TURNS),
     ),
     TrainingPhase.MEMORY_GAP: PhaseConfig(
         name="Memory Gap",
-        full_observability=False,
         min_episodes=0,  # NOT ENFORCED
         max_episodes=0,  # NOT ENFORCED
         opponents=["frozen_heuristic", "smart_heuristic"],
@@ -100,11 +97,9 @@ PHASE_CONFIGS = {
         success_metrics={  # evaluation gates: see phase_gates()
             "heuristic": PHASE_2_WIN_THRESHOLD
         },
-        max_turns=PHASE_MAX_TURNS.get(2, DEFAULT_MAX_TURNS),
     ),
     TrainingPhase.SELF_PLAY: PhaseConfig(
         name="Simple Self-Play",
-        full_observability=False,
         min_episodes=0,  # NOT ENFORCED
         max_episodes=0,  # NOT ENFORCED
         opponents=["self_500", "smart_heuristic"],
@@ -112,11 +107,9 @@ PHASE_CONFIGS = {
         success_metrics={  # evaluation gates: see phase_gates()
             "heuristic": PHASE_3_WIN_THRESHOLD
         },
-        max_turns=PHASE_MAX_TURNS.get(3, DEFAULT_MAX_TURNS),
     ),
     TrainingPhase.LEAGUE_TRAINING: PhaseConfig(
         name="League Training",
-        full_observability=False,
         min_episodes=0,  # NOT ENFORCED
         max_episodes=0,  # NOT ENFORCED
         opponents=["league", "self"], # Pure MARL, no cheating heuristics
@@ -126,11 +119,9 @@ PHASE_CONFIGS = {
             "league_elo": 1500,
             "win_rate_stable": True
         },
-        max_turns=PHASE_MAX_TURNS.get(4, DEFAULT_MAX_TURNS),
     ),
     TrainingPhase.SCENARIO_DRILLS: PhaseConfig(
         name="Scenario Drills",
-        full_observability=False,
         min_episodes=0,  # NOT ENFORCED
         max_episodes=0,  # NOT ENFORCED
         opponents=["scenario_specific"],
@@ -139,7 +130,6 @@ PHASE_CONFIGS = {
             # Dynamic criteria: scenario completion
             "scenario_completion_rate": 0.80
         },
-        max_turns=DEFAULT_MAX_TURNS,
     )
 }
 
@@ -292,48 +282,6 @@ class CurriculumManager:
         """Get configuration for current phase."""
         return PHASE_CONFIGS[self.current_phase]
     
-    def get_max_turns(self) -> int:
-        """Get max turns for the current curriculum phase."""
-        config = self.get_phase_config()
-        return config.max_turns if config.max_turns > 0 else DEFAULT_MAX_TURNS
-    
-    def should_use_full_observability(self) -> bool:
-        """
-        Check if current phase uses full observability.
-        Legacy method - prefer get_observability_rate()
-        """
-        return self.get_observability_rate() > 0.0
-    
-    def get_observability_rate(self) -> float:
-        """
-        Get the percentage of hidden pieces to reveal (0.0 to 1.0).
-        - 1.0: Full Observability (Physics of War)
-        - 0.0: Partial Observability (Memory Gap+)
-        - 0.3-0.8: Mixed Observability (Transition/Fog)
-        """
-        config = self.get_phase_config()
-        
-        # Base setting from config
-        if not config.full_observability:
-            return 0.0
-            
-        # Refined Phase 1 Logic:
-        # If we are in Phase 1 (Physics of War) but getting good (win rate > 80%),
-        # start introducing "Fog of War" to prepare for Phase 2.
-        if self.current_phase == TrainingPhase.PHYSICS_OF_WAR:
-            metrics = self.metrics[self.current_phase]
-            win_rate = metrics.overall_win_rate
-            
-            # Transition Zone: 85% Win Rate -> Start hiding 50% of pieces
-            if win_rate > 0.85:
-                return 0.5  # 50% Fog
-            
-            # Late Stage: 75% Win Rate -> Start hiding 20% of pieces
-            if win_rate > 0.75:
-                return 0.8  # 20% Fog
-                
-        return 1.0
-    
     # ------------------------------------------------------------------
     # PFSP Scheduler (Prioritized Fictitious Self-Play)
     # ------------------------------------------------------------------
@@ -415,11 +363,15 @@ class CurriculumManager:
 
             return self._pfsp_weights(candidates)
 
+        # Stages 2 and 3 keep the stage-1 opponents in the pool. Without them the agent of
+        # formal_6 only drew or lost after the stage-1 cap, its values went to the value of a
+        # draw and it stopped attacking (it drew 27 of 30 games against the random opponent it
+        # had beaten). PFSP gives an opponent the agent beats little weight, 'random' at least 15%.
         elif self.current_phase == TrainingPhase.MEMORY_GAP:
-            return self._pfsp_weights(["frozen_heuristic", "smart_heuristic"])
+            return self._pfsp_weights(["random", "heuristic", "frozen_heuristic", "smart_heuristic"])
 
         elif self.current_phase == TrainingPhase.SELF_PLAY:
-            return self._pfsp_weights(["self_500", "smart_heuristic"])
+            return self._pfsp_weights(["random", "heuristic", "self_500", "smart_heuristic"])
 
         elif self.current_phase == TrainingPhase.LEAGUE_TRAINING:
             return self._pfsp_weights(config.opponents)
@@ -573,7 +525,6 @@ class CurriculumManager:
             'episodes_in_phase': metrics.episodes_in_phase,
             'min_episodes': config.min_episodes,
             'max_episodes': config.max_episodes,
-            'full_observability': config.full_observability,
             'win_rate': metrics.overall_win_rate,
             'win_rate_vs_random': metrics.win_rate_vs_random,
             'win_rate_vs_heuristic': metrics.win_rate_vs_heuristic,

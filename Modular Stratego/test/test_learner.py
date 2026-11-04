@@ -131,6 +131,74 @@ def test_replay_masks_the_double_dqn_action(cpu, tiny_network, config_override, 
     assert next_legal[torch.arange(len(actions)), actions].all()
 
 
+def test_per_priority_is_the_kl_not_the_cross_entropy(cpu, tiny_network, config_override, monkeypatch):
+    """Rainbow prioritises by KL(m || p). The cross-entropy adds H(m), about the same for every
+    transition, which flattened the priorities (formal_4 probe: terminal transitions got no more
+    replay than quiet ones)."""
+    from network.drqn_agent import RainbowAgent
+    m = torch.softmax(torch.randn(3, 51), dim=1)
+    kl = RainbowAgent._per_priorities(m, m.log())
+    assert torch.allclose(kl, torch.zeros(3), atol=1e-5)  # the cross-entropy would be H(m) > 0
+    p = torch.full((1, 51), 1 / 51)
+    one_hot = torch.zeros(1, 51); one_hot[0, 7] = 1
+    assert RainbowAgent._per_priorities(one_hot, p.log()).item() == pytest.approx(np.log(51), rel=1e-5)
+
+    config_override(WARMUP_STEPS=0)
+    agent = _agent(cpu, batch_size=4)
+    _fill(agent)
+    given, used = [], []
+    original = agent._per_priorities
+    monkeypatch.setattr(agent, '_per_priorities', lambda m, lp: used.append(original(m, lp)) or used[-1])
+    monkeypatch.setattr(agent.memory, 'update_priorities', lambda idx, td: given.append(np.asarray(td)))
+    assert agent.replay() is not None
+    assert len(given) == 1 and np.allclose(given[0], used[0].numpy())
+
+
+def test_target_network_has_no_dropout_and_keeps_its_noise(cpu, tiny_network, config_override):
+    from network.networks.noisy_linear import NoisyLinear
+    config_override(WARMUP_STEPS=0, TARGET_UPDATE_INTERVAL=1)
+    agent = _agent(cpu, batch_size=8)
+    _fill(agent)
+    assert agent.replay() is not None  # copies the target again
+    target = agent.target_network
+    assert not target.training
+    assert all(mod.noisy for mod in target.modules() if isinstance(mod, NoisyLinear))
+    x = torch.rand(2, agent.input_channels, 10, 10)
+    with torch.no_grad():
+        assert torch.equal(target(x), target(x))  # same noise sample, no dropout
+        before = target(x)
+        target.reset_noise()
+        assert not torch.equal(target(x), before)  # NoisyNet noise is still on
+
+
+def test_n_step_battle_flag_is_the_first_steps():
+    from network.prioritized_memory import NStepBuffer
+    buf = NStepBuffer(n_steps=3, gamma=0.5)
+    out = []
+    for t in range(5):
+        r = buf.add(t, t, 1.0, t + 1, t == 4, is_battle=(t == 2))
+        if r:
+            out.append(r)
+    out += buf.flush()
+    assert [o[1] for o in out] == [0, 1, 2, 3, 4]
+    assert [o[-1] for o in out] == [False, False, True, False, False]
+
+
+def test_battle_boost_goes_to_the_battle_move_and_its_mirror(cpu, tiny_network, config_override):
+    """The boost goes with the n-step window that starts with the battle move, original and
+    mirror. (The thesis code boosted the window that started n-1 moves earlier and never the
+    mirror; a battle on the second move of a game was boosted nowhere.)"""
+    config_override(ENABLE_DATA_AUGMENTATION=True, AUGMENTATION_TYPES=["flip"])
+    agent = _agent(cpu)
+    n = agent.n_steps
+    for k, (state, move, next_state, next_moves) in enumerate(_steps(cpu, n + 1)):
+        info = {'revealed_in_step': [((0, 0), None), ((0, 1), None)]} if k == 1 else {}
+        agent.remember_batch([state.board], [move], [0.0], [next_state.board], [False], [True], [state], [next_state],
+                             infos=[info], next_legal_moves=[next_moves])
+    leaves = agent.memory.tree.tree[agent.memory.capacity - 1:][:len(agent.memory)]
+    assert np.allclose(leaves, [1.0, 1.0, 2.5, 2.5])  # windows from move 0, its mirror, move 1, its mirror
+
+
 # ---------------------------------------------------------------- one gamma
 
 def test_one_discount_factor(cpu, tiny_network):
@@ -162,12 +230,46 @@ def test_target_starts_as_a_copy_and_is_hard_copied_every_n_updates(cpu, tiny_ne
     assert _same_weights(agent.q_network, agent.target_network)
 
 
+def test_average_q_is_the_q_of_the_actions_taken(cpu, tiny_network):
+    """Not the max over all 3600 actions: nearly all are illegal and untrained, and that max read
+    about +2 in formal_2 while the returns were about -1."""
+    agent = _agent(cpu, batch_size=8)
+    state = (torch.rand(agent.input_channels, 10, 10) > 0.5).float()
+    for _ in range(20):
+        agent.memory.add(state, 7, 0.0, state, True)
+    agent.q_network.eval()
+    with torch.no_grad():
+        q = (agent.q_network(state.unsqueeze(0)).exp() * agent.support).sum(dim=2)[0]
+    assert agent.get_average_q() == pytest.approx(q[7].item(), abs=1e-5)
+    assert q[7].item() != pytest.approx(q.max().item(), abs=1e-5)
+
+
+def test_the_group_norm_is_instance_norm():
+    from network.networks.rainbow_dqn import instance_norm
+    x = torch.randn(5, 64, 10, 10) * 3 + 1
+    assert torch.allclose(instance_norm(64)(x), torch.nn.functional.instance_norm(x), atol=1e-5)
+    assert not list(instance_norm(64).parameters()) and not list(instance_norm(64).buffers())
+
+
+def test_softmax_after_the_gather_is_the_full_distribution_of_that_action(cpu, tiny_network):
+    """The learner normalizes only the actions it gathers; that equals gathering from forward()."""
+    agent = _agent(cpu)
+    net = agent.q_network.eval()
+    x = (torch.rand(4, agent.input_channels, 10, 10) > 0.7).float()
+    actions = torch.tensor([0, 17, 1234, 3599])
+    idx = actions.view(-1, 1, 1).expand(-1, -1, agent.num_atoms)
+    with torch.no_grad():
+        full = net(x).gather(1, idx).squeeze(1)
+        gathered = torch.nn.functional.log_softmax(net.forward_logits(x).gather(1, idx).squeeze(1), dim=1)
+    assert torch.allclose(full, gathered, atol=1e-5)
+
+
 # ---------------------------------------------------------------- PER
 
 def test_new_samples_get_the_largest_priority_so_far():
     from network.prioritized_memory import PrioritizedReplayBuffer
     buf = PrioritizedReplayBuffer(100, device='cpu', alpha=0.6)
-    x = torch.zeros(30, 10, 10)
+    x = torch.zeros(32, 10, 10)
     buf.add(x, 0, 0.0, x, False)
     first = buf.capacity - 1
     buf.update_priorities([first], [4.0])
@@ -235,13 +337,14 @@ def test_observations_are_stored_as_uint8_and_read_back(cpu, tiny_network):
     agent = _agent(cpu)
     state = StrategoEnvironment(cpu).reset()
     x = agent.get_batch_state_representation([state.board], [state])[0]
-    x[27:] = torch.rand(3, 10, 10)  # the fraction planes
+    x[27:30] = torch.rand(3, 10, 10)  # the fraction planes
+    x[30:] = (torch.rand(2, 10, 10) < 0.5).float()  # the binary moved planes
     packed = pack_state(x, 'cpu', torch.float32)
     assert packed.dtype == torch.uint8
     back = unpack_states([packed], 'cpu')[0]
-    assert torch.equal(back[:27], x[:27])
+    assert torch.equal(back[:27], x[:27]) and torch.equal(back[30:], x[30:])
     assert (back - x).abs().max() <= 1 / 510 + 1e-6
-    y = torch.randn(30, 10, 10)
+    y = torch.randn(32, 10, 10)
     assert torch.equal(unpack_states([pack_state(y, 'cpu', torch.float32)], 'cpu')[0], y)
 
 
@@ -282,3 +385,60 @@ def test_trainer_stores_next_legal_moves_of_the_learner(tmp_path, config_overrid
                 assert board[r][c] > 0  # Player 1's own piece
             checked += 1
     assert checked > 0
+
+
+# ---------------------------------------------------------------- revealed attacks and the mean loss
+
+def test_a_persistent_boost_survives_priority_updates_and_is_not_corrected():
+    from network.prioritized_memory import PrioritizedReplayBuffer
+    buf = PrioritizedReplayBuffer(8, device='cpu', alpha=1.0, beta_start=1.0)
+    x = torch.zeros(32, 10, 10)
+    buf.add(x, 0, 0.0, x, False)
+    buf.add(x, 1, 0.0, x, False, boost=4.0)
+    leaf = buf.capacity - 1
+    assert buf.tree.tree[leaf + 1] == pytest.approx(4 * buf.tree.tree[leaf])
+    buf.update_priorities([leaf, leaf + 1], [0.5, 0.5])
+    assert buf.tree.tree[leaf + 1] == pytest.approx(4 * buf.tree.tree[leaf])  # kept on update
+    weights, indices = None, []
+    for _ in range(20):
+        sample = buf.sample(2)
+        indices, weights = sample[5], sample[6]
+        if len(set(indices)) == 2:
+            break
+    assert len(set(indices)) == 2
+    assert torch.allclose(weights, torch.ones_like(weights))  # same raw priority, same weight
+
+
+def test_attacks_on_revealed_pieces_are_boosted_with_their_mirror(cpu, tiny_network, config_override):
+    from environment.piece import PieceType
+    config_override(ENABLE_DATA_AUGMENTATION=True, AUGMENTATION_TYPES=["flip"], N_STEPS=1,
+                    REVEALED_ATTACK_PRIORITY=4.0)
+    agent = _agent(cpu)
+    state = torch.zeros(32, 10, 10)
+    state[PieceType.CAPTAIN.value - 1, 6, 3] = 1          # own Captain
+    state[12 + PieceType.SCOUT.value - 1, 5, 3] = 1       # revealed enemy Scout above it
+    state[24, 6, 4] = 1                                   # hidden enemy to its right
+    attack_revealed = encode_move(((6, 3), (5, 3)), 1)
+    attack_hidden = encode_move(((6, 3), (6, 4)), 1)
+    assert agent._attacks_revealed_piece(state, attack_revealed)
+    assert not agent._attacks_revealed_piece(state, attack_hidden)
+    agent._add_experience(state, attack_revealed, 0.0, state, False)
+    agent._add_experience(state, attack_hidden, 0.0, state, False)
+    leaves = agent.memory.tree.tree[agent.memory.capacity - 1:][:len(agent.memory)]
+    assert np.allclose(leaves, [4.0, 4.0, 1.0, 1.0])  # original and mirror of each
+
+
+def test_mean_loss_is_added_to_the_cross_entropy(cpu, tiny_network, config_override):
+    config_override(WARMUP_STEPS=0)
+    losses = {}
+    for weight in (0.0, 1.0):
+        config_override(MEAN_LOSS_WEIGHT=weight)
+        torch.manual_seed(0)
+        agent = _agent(cpu, batch_size=8)
+        torch.manual_seed(1)
+        _fill(agent)
+        import random
+        random.seed(2)
+        agent.memory.sample = (lambda s: lambda n: s)(agent.memory.sample(8))  # the same batch
+        losses[weight] = agent.replay()
+    assert losses[1.0] > losses[0.0]

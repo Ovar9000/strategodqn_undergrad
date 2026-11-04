@@ -15,6 +15,14 @@ from environment.action_encoding import ACTIONS_PER_SQUARE, NUM_ACTIONS
 from environment.observation import NUM_OBS_PLANES
 
 
+def instance_norm(channels: int) -> nn.GroupNorm:
+    """Per-sample, per-channel normalization over the board: InstanceNorm2d(channels) (no affine,
+    no running statistics) as one group per channel. Same function and no parameters, so the
+    checkpoints load unchanged; PyTorch's InstanceNorm kernel on 10x10 maps took 36% of a forward
+    pass."""
+    return nn.GroupNorm(channels, channels, affine=False)
+
+
 class ResidualBlock(nn.Module):
     """
     Simple Residual Block for Stratego ResNet
@@ -22,9 +30,9 @@ class ResidualBlock(nn.Module):
     def __init__(self, channels):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.bn1 = nn.InstanceNorm2d(channels) # InstanceNorm is often better for batch-size 1 or small batches
+        self.bn1 = instance_norm(channels)  # per-sample statistics: independent of the batch size
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.bn2 = nn.InstanceNorm2d(channels)
+        self.bn2 = instance_norm(channels)
         
     def forward(self, x):
         residual = x
@@ -136,7 +144,7 @@ class RainbowDQN(nn.Module):
         # Initial Convolution
         # Input: (C_in, 10, 10) -> Output: (channels, 10, 10)
         self.conv_in = nn.Conv2d(input_shape[0], channels, kernel_size=3, padding=1)
-        self.bn_in = nn.InstanceNorm2d(channels)
+        self.bn_in = instance_norm(channels)
         
         # Residual Backbone
         # Keeps shape (channels, 10, 10) but increases depth/abstraction
@@ -149,7 +157,7 @@ class RainbowDQN(nn.Module):
         # Value Head
         # (channels, 10, 10) -> (1, 10, 10) -> Flatten -> 100 -> NoisyLinear
         self.value_conv = nn.Conv2d(channels, 1, kernel_size=1)
-        self.value_bn = nn.InstanceNorm2d(1)
+        self.value_bn = instance_norm(1)
         self.value_fc = NoisyLinear(10 * 10, 256)
         self.value_out = NoisyLinear(256, num_atoms)
         
@@ -159,13 +167,18 @@ class RainbowDQN(nn.Module):
         self.advantage_out = NoisyLinear(advantage_hidden, ACTIONS_PER_SQUARE * num_atoms)
         
     def forward(self, x):
+        return F.log_softmax(self.forward_logits(x), dim=2)
+
+    def forward_logits(self, x):
+        """(batch, 3600, atoms) logits; forward() is their log-softmax over the atoms. The learner
+        takes the softmax of only the actions it needs (each action's is independent)."""
         batch_size = x.size(0)
-        
+
         # ResNet Backbone
         x = F.relu(self.bn_in(self.conv_in(x)))
         for block in self.res_blocks:
             x = block(x)
-        
+
         # Spatial Self-Attention for global reasoning
         x = self.spatial_attention(x)
             
@@ -186,8 +199,7 @@ class RainbowDQN(nn.Module):
         
         # Combine: Q(s, a) = V(s) + (A(s, a) - mean(A(s, a)))
         adv_mean = adv_out.mean(dim=1, keepdim=True)
-        q_logits = val_out + (adv_out - adv_mean)
-        return F.log_softmax(q_logits, dim=2)
+        return val_out + (adv_out - adv_mean)
         
     def evaluate_state_value(self, x):
         """

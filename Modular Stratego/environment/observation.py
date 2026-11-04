@@ -1,5 +1,5 @@
 """
-Observation planes: what one side can see, as a (30, 10, 10) float tensor in that side's
+Observation planes: what one side can see, as a (32, 10, 10) float tensor in that side's
 canonical frame (Player 2's board rotated 180 degrees, see action_encoding.py), so one network
 can play either side and its action indices line up with the squares.
 
@@ -13,12 +13,14 @@ can play either side and its action indices line up with the squares.
            (1 = full observability, 0 = normal fog of war), constant over the board
     28     no-battle counter: plies since the last battle / the no-battle draw limit (0 if off)
     29     game progress: turns played / turn limit (0 if unknown)
+    30     enemy pieces of unknown rank that have moved (so not a Bomb or the Flag)
+    31     enemy pieces of unknown rank that have moved more than one square at once (Scouts)
 
 Empty squares are the squares with no plane set. The thesis encoding had 15 planes: own pieces
 by rank, one plane for every enemy piece (ranks dropped, even revealed ones and even under full
 observability), lakes and empty squares, and no counters.
 
-Planes 26-29 come from the GameState (the GUI bot passes a GuiObservation with the same
+Planes 26-31 come from the GameState (the GUI bot passes a GuiObservation with the same
 fields); a bare board leaves them at 0.
 """
 
@@ -38,7 +40,9 @@ CH_OWN_REVEALED = 26
 CH_OBSERVABILITY = 27
 CH_NO_BATTLE = 28
 CH_PROGRESS = 29
-NUM_OBS_PLANES = 30
+CH_ENEMY_MOVED = 30
+CH_ENEMY_LONG_MOVED = 31
+NUM_OBS_PLANES = 32
 
 
 def _board_tensor(item, device) -> torch.Tensor:
@@ -59,7 +63,7 @@ def encode_observations(items: Sequence, players, device=None) -> torch.Tensor:
     Observation planes for a batch.
 
     Args:
-        items: GameState objects (planes 26-29 read from them) or bare 10x10 boards in the
+        items: GameState objects (planes 26-31 read from them) or bare 10x10 boards in the
             board.py value convention (Player 1 positive, Player 2 negative, LAKE_SQUARE,
             HIDDEN_PIECE for an enemy of unknown rank).
         players: the viewing side for each item (1, or -1/2 for Player 2), or one value for all.
@@ -100,6 +104,10 @@ def encode_observations(items: Sequence, players, device=None) -> torch.Tensor:
         obs[i, CH_OBSERVABILITY] = float(getattr(it, 'observability', 0.0) or 0.0)
         obs[i, CH_NO_BATTLE] = _ratio(getattr(it, 'plies_since_battle', 0), getattr(it, 'no_battle_draw_plies', 0))
         obs[i, CH_PROGRESS] = _ratio(getattr(it, 'turn_count', 0), getattr(it, 'max_turns', 0))
+        for ch, name in ((CH_ENEMY_MOVED, 'moved'), (CH_ENEMY_LONG_MOVED, 'long_moved')):
+            flags = getattr(it, name, None)
+            if flags is not None:  # board coordinates, both sides: keep the hidden enemy squares
+                obs[i, ch] = (torch.as_tensor(flags, device=device).bool() & hidden[i]).float()
 
     second = (sign.view(n) < 0)
     if second.any():

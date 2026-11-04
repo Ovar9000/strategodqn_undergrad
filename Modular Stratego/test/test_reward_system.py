@@ -18,10 +18,10 @@ import pytest
 import torch
 
 from network.distributional_reward import (UnifiedRewardShaper, StrategoRewardConfig, compute_potential,
-                                   ARMY_MATERIAL, UNKNOWN_PIECE_RANK)
+                                   ARMY_MATERIAL, UNKNOWN_PIECE_RANK, potential_range)
 from environment.game_state import GameState
 from environment.piece import PieceType
-from settings.training_config import GAMMA
+from settings.training_config import GAMMA, POTENTIAL_WEIGHTS
 
 HIDDEN = -20
 
@@ -90,7 +90,7 @@ def test_hidden_enemy_pieces_count_with_the_mean_army_rank():
     captured = make_board({(6, 0): CAPTAIN, (0, 5): HIDDEN})
     gain = compute_potential(captured, 1) - compute_potential(with_piece, 1)
     assert UNKNOWN_PIECE_RANK == pytest.approx(3.7) and ARMY_MATERIAL == 148
-    assert gain == pytest.approx(0.4 * UNKNOWN_PIECE_RANK / ARMY_MATERIAL)
+    assert gain == pytest.approx(POTENTIAL_WEIGHTS[0] * UNKNOWN_PIECE_RANK / ARMY_MATERIAL)
 
 
 def test_hidden_markers_are_enemy_pieces_for_player_two_as_well():
@@ -98,7 +98,7 @@ def test_hidden_markers_are_enemy_pieces_for_player_two_as_well():
     view = make_board({(3, 0): -CAPTAIN, (7, 0): HIDDEN, (9, 9): HIDDEN})
     without = make_board({(3, 0): -CAPTAIN, (9, 9): HIDDEN})
     assert compute_potential(without, -1) - compute_potential(view, -1) == pytest.approx(
-        0.4 * UNKNOWN_PIECE_RANK / ARMY_MATERIAL)
+        POTENTIAL_WEIGHTS[0] * UNKNOWN_PIECE_RANK / ARMY_MATERIAL)
 
 
 def test_potential_does_not_see_unrevealed_enemy_ranks(cpu):
@@ -228,7 +228,11 @@ def test_dead_code_removed():
 
 
 def test_c51_support():
-    """C51 support range in agent"""
+    """C51 support range in agent: it covers every return (outcome + telescoped shaping)."""
     from network.drqn_agent import V_MIN, V_MAX, NUM_ATOMS
-    assert V_MIN == -10.0 and V_MAX == 10.0 and NUM_ATOMS == 51
-    assert abs((V_MAX - V_MIN) / (NUM_ATOMS - 1) - 0.4) < 0.01
+    from network.training.transitions import outcome_reward
+    assert V_MIN == -6.0 and V_MAX == 6.0 and NUM_ATOMS == 51
+    assert abs((V_MAX - V_MIN) / (NUM_ATOMS - 1) - 0.24) < 0.001
+    phi_min, phi_max = potential_range()
+    for winner in (1, -1, 0):
+        assert V_MIN <= outcome_reward(winner, 1) - phi_max and outcome_reward(winner, 1) - phi_min <= V_MAX

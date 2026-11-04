@@ -24,6 +24,10 @@ class GameState:
     max_turns: int = 0                  # the env's turn limit
     observability: float = 0.0          # share of hidden enemy ranks shown (1.0 = full observability)
     own_revealed: Optional[torch.Tensor] = None  # (10, 10) bool: own pieces whose rank the enemy knows
+    # (10, 10) bool, board coordinates, both sides: the piece on the square has moved / has made a
+    # move of more than one square (only a Scout can), which either player can see
+    moved: Optional[torch.Tensor] = None
+    long_moved: Optional[torch.Tensor] = None
 
     def get_player_view(self, player: int) -> torch.Tensor:
         """Returns the board as seen by the specified player."""
@@ -71,5 +75,7 @@ class GameState:
             no_battle_draw_plies=self.no_battle_draw_plies,
             max_turns=self.max_turns,
             observability=self.observability,
-            own_revealed=self.own_revealed.clone() if self.own_revealed is not None else None
+            own_revealed=self.own_revealed.clone() if self.own_revealed is not None else None,
+            moved=self.moved.clone() if self.moved is not None else None,
+            long_moved=self.long_moved.clone() if self.long_moved is not None else None
         )

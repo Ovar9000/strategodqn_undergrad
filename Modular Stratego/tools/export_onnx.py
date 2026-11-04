@@ -5,7 +5,7 @@ Export a trained agent's Q-network to ONNX for the browser player (web/play.html
 
 <checkpoint> is a RainbowAgent save: a .pth from save_model, an agent1_league_episode_*.pt, or a
 checkpoint .tar.gz from the Checkpointer. The ONNX model takes the observation planes
-"obs" (B, C, 10, 10) float32 in the mover's canonical frame (environment/observation.py; C = 30,
+"obs" (B, C, 10, 10) float32 in the mover's canonical frame (environment/observation.py; C = 32,
 plus the AAREN planes if the agent was trained with AAREN_ENABLED, which the browser fills with
 zeros) and returns "q" (B, 3600): the expected value of each action's C51 distribution, indexed
 as in environment/action_encoding.py. The browser masks the illegal actions and plays the argmax.
@@ -17,6 +17,7 @@ import sys
 
 import torch
 
+from environment.observation import NUM_OBS_PLANES
 from network import RainbowAgent
 from network.training import Checkpointer
 
@@ -60,9 +61,9 @@ def export(path: str, out: str) -> str:
         torch.onnx.export(model, (dummy,), out, input_names=['obs'], output_names=['q'],
                           dynamic_axes={'obs': {0: 'batch'}, 'q': {0: 'batch'}}, opset_version=17,
                           dynamo=False)
-    meta = {'input_planes': channels, 'observation_planes': 30,
-            'aaren_planes': channels - 30, 'actions': int(agent.action_size),
-            'encoding': 'canonical-frame obs (30 planes) / index = sq*36 + dir*9 + dist-1',
+    meta = {'input_planes': channels, 'observation_planes': NUM_OBS_PLANES,
+            'aaren_planes': channels - NUM_OBS_PLANES, 'actions': int(agent.action_size),
+            'encoding': f'canonical-frame obs ({NUM_OBS_PLANES} planes) / index = sq*36 + dir*9 + dist-1',
             'source': os.path.basename(path)}
     with open(os.path.splitext(out)[0] + '.json', 'w') as f:
         json.dump(meta, f, indent=2)

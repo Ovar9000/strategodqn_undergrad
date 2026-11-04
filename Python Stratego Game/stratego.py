@@ -100,6 +100,8 @@ class Piece:
     owner: int
     rank: int
     revealed: bool = False
+    moved: bool = False        # has moved (so not a Bomb or the Flag), seen by both sides
+    long_moved: bool = False   # has moved more than one square at once (a Scout)
 
     def display(self, viewer: int) -> str:
         if self.owner == viewer or self.revealed:
@@ -249,6 +251,8 @@ class Board:
         attacker = self.get(src)
         defender = self.get(dst)
         assert attacker is not None
+        attacker.moved = True
+        attacker.long_moved = attacker.long_moved or abs(dst[0] - src[0]) + abs(dst[1] - src[1]) > 1
         self.turn_count += 1
         self.plies_since_battle = 0 if defender is not None else self.plies_since_battle + 1
 

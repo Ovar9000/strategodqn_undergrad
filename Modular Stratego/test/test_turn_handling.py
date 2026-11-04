@@ -191,7 +191,7 @@ def test_opponent_moves_update_the_lanes_own_history(cpu, tiny_network, config_o
     sums = [h.get_embedding_tensor().abs().sum().item() for h in agent.history_instances]
     assert sums[0] == 0 and sums[1] == 0 and sums[2] > 0
     x = agent.get_batch_state_representation([state.board], [state], env_indices=[2])
-    assert x[0, 30:].abs().sum() > 0  # the AAREN planes after the 30 observation planes
+    assert x[0, 32:].abs().sum() > 0  # the AAREN planes after the 32 observation planes
 
 
 def test_self_play_stores_the_opponents_own_view(tmp_path, config_override, monkeypatch):

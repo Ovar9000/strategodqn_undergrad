@@ -1,7 +1,7 @@
 """
 Input Channel Visualization Script
 
-Visualizes the 30 observation planes the Rainbow DQN agent receives (environment/observation.py).
+Visualizes the 32 observation planes the Rainbow DQN agent receives (environment/observation.py).
 Helps diagnose whether the agent can "see" important features like the enemy flag.
 
 Planes 0-11:  Own piece types (FLAG, SPY, SCOUT, MINER, SERGEANT, LIEUTENANT, CAPTAIN, MAJOR, COLONEL, GENERAL, MARSHAL, BOMB)
@@ -38,7 +38,7 @@ ENEMY_FLAG_PLANE = 12
 
 def visualize_input_channels(save_path: str = "dqn_models/input_visualization.png"):
     """
-    Create a visual representation of the 30 observation planes.
+    Create a visual representation of the 32 observation planes.
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -56,7 +56,7 @@ def visualize_input_channels(save_path: str = "dqn_models/input_visualization.pn
     print("Generating input tensor...")
     input_tensor = agent.get_state_representation(game_state, full_observability=True)
     
-    print(f"Input tensor shape: {input_tensor.shape}")  # (30, 10, 10)
+    print(f"Input tensor shape: {input_tensor.shape}")  # (32, 10, 10)
     
     # Convert to numpy for visualization
     input_np = input_tensor.cpu().numpy()

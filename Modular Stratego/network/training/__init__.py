@@ -7,6 +7,7 @@ from .checkpointing import Checkpointer
 from .starting_player import get_random_starting_player, get_batch_starting_players
 from .transitions import TurnTracker, outcome_reward
 from .evaluation import play_evaluation_games
+from .demonstrations import record_demonstrations
 
 __all__ = ['LaneManager', 'MetricsTracker', 'Checkpointer', 'get_random_starting_player', 'get_batch_starting_players',
-           'TurnTracker', 'outcome_reward', 'play_evaluation_games']
+           'TurnTracker', 'outcome_reward', 'play_evaluation_games', 'record_demonstrations']

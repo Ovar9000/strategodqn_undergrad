@@ -236,7 +236,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
   var LAKES = [[4, 2], [4, 3], [5, 2], [5, 3], [4, 6], [4, 7], [5, 6], [5, 7]];
   var DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];             // legal_moves order (environment.py)
   var ACTION_DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];      // up, down, left, right (action_encoding.py)
-  var NUM_ACTIONS = 3600, OBS_PLANES = 30;
+  var NUM_ACTIONS = 3600, OBS_PLANES = 32;
 
   function pieceSet() {
     var s = [P.FLAG, P.SPY, P.MARSHAL, P.GENERAL], i;
@@ -303,6 +303,8 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
   Game.prototype.reset = function (p1Placement, p2Placement, startingPlayer) {
     this.actual = new Int8Array(100);
     this.vis = { 1: new Int8Array(100), '-1': new Int8Array(100) };
+    this.moved = new Uint8Array(100);       // the piece on a square has moved (both sides see it)
+    this.longMoved = new Uint8Array(100);   // ... more than one square at once (a Scout)
     var self = this;
     LAKES.forEach(function (p) { var i = p[0] * N + p[1]; self.actual[i] = LAKE; self.vis[1][i] = LAKE; self.vis[-1][i] = LAKE; });
     this.flags = { 1: null, '-1': null };
@@ -355,25 +357,31 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     }
     var from = move[0][0] * N + move[0][1], to = move[1][0] * N + move[1][1];
     var a = this.actual, p = this.current, mover = a[from], target = a[to];
-    var mv = this.vis[p], ov = this.vis[-p];
+    var mv = this.vis[p], ov = this.vis[-p], self = this;
+    var longMove = Math.abs(move[1][0] - move[0][0]) + Math.abs(move[1][1] - move[0][1]) > 1;
+    function track() {   // the mover's moved flags go with it to `to`
+      self.longMoved[to] = self.longMoved[from] || longMove ? 1 : 0; self.moved[to] = 1;
+      self.moved[from] = 0; self.longMoved[from] = 0;
+    }
     if (target !== EMPTY && target !== LAKE) {
       this.plies = 0;
       var att = Math.abs(mover), def = Math.abs(target), res = battle(att, def);
       info.battle = { attacker: att, defender: def, result: res, player: p, from: move[0], to: move[1] };
       if (res === 1) {
-        a[to] = mover; a[from] = EMPTY;
+        a[to] = mover; a[from] = EMPTY; track();
         mv[to] = mover; mv[from] = EMPTY; ov[to] = mover; ov[from] = EMPTY;
         if (def === P.FLAG) { this.over = true; this.winner = p; this.winType = 'flag_capture'; this.flags[-p] = null; }
       } else if (res === -1) {
-        a[from] = EMPTY; mv[from] = EMPTY; ov[from] = EMPTY;
+        a[from] = EMPTY; mv[from] = EMPTY; ov[from] = EMPTY; this.moved[from] = 0; this.longMoved[from] = 0;
         mv[to] = target; ov[to] = target;              // the defender is revealed
       } else {
         a[from] = EMPTY; a[to] = EMPTY;
+        this.moved[from] = this.moved[to] = this.longMoved[from] = this.longMoved[to] = 0;
         mv[from] = EMPTY; mv[to] = EMPTY; ov[from] = EMPTY; ov[to] = EMPTY;
       }
     } else {
       var revealed = ov[from] === mover;              // the opponent already knows this piece
-      a[to] = mover; a[from] = EMPTY;
+      a[to] = mover; a[from] = EMPTY; track();
       mv[to] = mover; mv[from] = EMPTY;
       ov[from] = EMPTY; ov[to] = revealed ? mover : HIDDEN;
       this.plies += 1;
@@ -408,7 +416,8 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     return [canon(r1, c1, player), canon(r2, c2, player)];
   }
   // Observation planes (observation.py) of `player`'s view, normal fog of war (observability 0):
-  // a Float32Array of `planes` x 10 x 10 (planes beyond 30 are AAREN embeddings, left at zero).
+  // a Float32Array of `planes` x 10 x 10 (planes beyond 32 are AAREN embeddings, left at zero;
+  // a model with fewer planes, trained before planes 30-31 existed, gets only the first ones).
   Game.prototype.observation = function (player, planes) {
     planes = planes || OBS_PLANES;
     var obs = new Float32Array(planes * 100), view = this.vis[player], enemyView = this.vis[-player];
@@ -418,7 +427,10 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       var r = Math.floor(i / N), c = i % N, cc = canon(r, c, player), j = cc[0] * N + cc[1];
       var v = view[i];
       if (v === LAKE) obs[25 * 100 + j] = 1;
-      else if (v === HIDDEN) obs[24 * 100 + j] = 1;
+      else if (v === HIDDEN) {
+        obs[24 * 100 + j] = 1;
+        if (planes >= OBS_PLANES) { obs[30 * 100 + j] = this.moved[i]; obs[31 * 100 + j] = this.longMoved[i]; }
+      }
       else if (v !== EMPTY) {
         var s = v * player;
         if (s > 0) {
@@ -438,6 +450,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     var g = new Game({ maxTurns: this.maxTurns, noBattleLimit: this.noBattleLimit });
     g.actual = this.actual.slice();
     g.vis = { 1: this.vis[1].slice(), '-1': this.vis[-1].slice() };
+    g.moved = this.moved.slice(); g.longMoved = this.longMoved.slice();
     g.flags = { 1: this.flags[1], '-1': this.flags[-1] };
     ['current', 'turn', 'plies', 'over', 'winner', 'winType', 'lastMove'].forEach(function (k) { g[k] = this[k]; }, this);
     return g;

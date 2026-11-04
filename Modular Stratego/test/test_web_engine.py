@@ -12,7 +12,7 @@ import torch
 
 from environment.action_encoding import legal_action_indices
 from environment import StrategoEnvironment, HeuristicSetupAgent
-from environment.observation import encode_observation
+from environment.observation import NUM_OBS_PLANES, encode_observation
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NODE = shutil.which('node')
@@ -37,7 +37,7 @@ def record_game(seed, max_turns, no_battle):
         plies.append({'player': state.current_player,
                       'legal': [[list(a), list(b)] for a, b in moves],
                       'indices': sorted(legal_action_indices(moves, state.current_player)),
-                      'obs_nonzero': torch.nonzero(obs[:28].flatten()).flatten().tolist(),
+                      'obs_nonzero': torch.nonzero(torch.cat([obs[:28], 0 * obs[28:30], obs[30:]]).flatten()).flatten().tolist(),
                       'no_battle_plane': float(obs[28, 0, 0]), 'progress_plane': float(obs[29, 0, 0]),
                       'move': [list(move[0]), list(move[1])]})
         state, _, done, info = env.step(move)
@@ -78,4 +78,4 @@ def test_onnx_export_gives_the_agents_expected_q_values(tmp_path, tiny_network):
     got = onnxruntime.InferenceSession(out).run(None, {'obs': obs.numpy()})[0]
     assert got.shape == (2, 3600)
     assert np.abs(got - expected).max() < 1e-4
-    assert json.load(open(tmp_path / 'agent.json'))['input_planes'] == 30
+    assert json.load(open(tmp_path / 'agent.json'))['input_planes'] == NUM_OBS_PLANES == 32

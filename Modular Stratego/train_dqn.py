@@ -4,8 +4,9 @@ Training Script for Rainbow DQN Agents in Stratego
 - Agent 1 trains; the other side is a scripted opponent, a league snapshot or a self-play copy
 - NUM_LANES games run in parallel; a transition is one move plus the opponent's reply
   (network/training/transitions.py)
-- Curriculum phases advance on evaluation gates (environment/curriculum.py); each lane draws its
-  opponent for the next game from the phase's PFSP weights
+- An opponent schedule (environment/curriculum.py) advances its stages on evaluation gates; each
+  lane draws its opponent for the next game from the stage's PFSP weights. Every stage plays the
+  same game: fog of war, one turn limit and draw rule, constant shaping
 - AAREN history planes are off by default (AAREN_ENABLED in settings/training_config.py)
 """
 
@@ -23,6 +24,7 @@ import glob
 import queue
 import threading
 import time
+import contextlib
 import gc  # Garbage collection for memory cleanup
 import copy
 import traceback
@@ -49,6 +51,8 @@ from network import (
     LaneManager, MetricsTracker, Checkpointer, get_random_starting_player, TurnTracker, outcome_reward,
     play_evaluation_games
 )
+from network.training.demonstrations import record_demonstrations
+from network.training.async_learner import AsyncLearner
 from settings import *
 from utils import save_training_history, load_training_history
 from network.training.preflight import run_preflight_checks
@@ -161,18 +165,13 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
     curriculum = None
     if CURRICULUM_ENABLED:
         curriculum = CurriculumManager(start_phase=CURRICULUM_START_PHASE, save_dir=model_save_path)
-        print(f"[INFO] Curriculum enabled: Phase {curriculum.current_phase.value} ({curriculum.get_phase_config().name})")
-        
-        # Set initial observability based on phase
-        if curriculum.should_use_full_observability():
-            parallel_env.set_full_observability(True)
-            print("   Full observability mode: ENABLED (Phase 1)")
-        
-        # Set max turns based on curriculum phase
-        from settings.training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
-        max_turns = PHASE_MAX_TURNS.get(curriculum.current_phase.value, DEFAULT_MAX_TURNS)
-        parallel_env.set_max_turns(max_turns)
-        print(f"   Max turns per game: {max_turns} (Phase {curriculum.current_phase.value})")
+        print(f"[INFO] Opponent schedule enabled: stage {curriculum.current_phase.value} ({curriculum.get_phase_config().name})")
+    # One game for every stage: fog of war, DEFAULT_MAX_TURNS, NO_BATTLE_DRAW_PLIES, constant
+    # shaping. (The thesis curriculum switched observability, turn limit and shaping per phase.)
+    from settings.training_config import DEFAULT_MAX_TURNS
+    parallel_env.set_max_turns(DEFAULT_MAX_TURNS)
+    parallel_env.set_full_observability(False)
+    print(f"   Max turns per game: {DEFAULT_MAX_TURNS}, fog of war")
     
     # MARL Optimization: Disable heuristic move filtering for Agent 2
     # During League Training, we want Agent 2 to learn pure RL policies quickly
@@ -252,6 +251,13 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
     # Open moves per lane and side: a side's transition ends at its own view after the opponent's reply
     turn_tracker = TurnTracker(num_envs)
 
+    async_learner = None  # AsyncLearner for agent1 once the games start (ASYNC_LEARNER)
+
+    def weights_still():
+        """Inside, agent1's weights, optimizer and memory are not being updated (the async
+        learner is paused); without the async learner, nothing to do."""
+        return async_learner.paused() if async_learner is not None else contextlib.nullcontext()
+
     def history_snapshot(agent, lane):
         """AAREN history of `agent` in `lane` right now (stored with the state it is about to act on)."""
         instances = getattr(agent, 'history_instances', None)
@@ -265,17 +271,6 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
     for dr, p2r in zip(lane_dist_rewards, lane_p2_shapers):
         dr.reset()
         p2r.reset()
-        if curriculum and CURRICULUM_ENABLED:
-            dr.set_phase(curriculum.current_phase.value)
-            p2r.set_phase(curriculum.current_phase.value)
-    
-    # Observability Rate for curriculum (Transitions/Fog)
-    obs_rate = 1.0
-    if curriculum and CURRICULUM_ENABLED:
-        obs_rate = curriculum.get_observability_rate()
-    
-    # Set Environment Observability (handles float for mixed/fog mode)
-    parallel_env.set_full_observability(obs_rate)
     
     # Agent Logic: ALWAYS use AAREN embeddings (partial observability mode)
     # Agent learns with AAREN memory from day one, not just later phases
@@ -347,8 +342,9 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                 snapshot_agent.load_model(path)
                 print(f"[SNAPSHOT] Frozen opponent: {os.path.basename(path)}")
         else:
-            snapshot_agent.q_network.load_state_dict(agent1.q_network.state_dict())
-            snapshot_agent.target_network.load_state_dict(agent1.target_network.state_dict())
+            with weights_still():
+                snapshot_agent.q_network.load_state_dict(agent1.q_network.state_dict())
+                snapshot_agent.target_network.load_state_dict(agent1.target_network.state_dict())
         _snapshot_path[0] = path
         _snapshot_loaded_at[0] = completed_episodes
 
@@ -424,7 +420,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
             agent2.episode_memory.start_episode(i)
     
     # State tracking for intervals
-    last_replay_step = 0
+    last_replay_step = global_step  # a resumed run must not replay the whole interval since step 0
     next_eval_episode = (completed_episodes // EVAL_INTERVAL + 1) * EVAL_INTERVAL
 
     def make_eval_opponent(opponent_type):
@@ -441,26 +437,64 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
 
     def run_evaluation():
         """EVAL_GAMES greedy games against each gate opponent of the phase (smart_heuristic once no
-        gates are left, for the record); the results go to the curriculum and the metrics."""
-        from settings.training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
+        gates are left, for the record), and against the random opponent in every phase so that
+        forgetting shows; the results go to the curriculum and the metrics."""
+        from settings.training_config import DEFAULT_MAX_TURNS
         phase = curriculum.current_phase.value
         gates = curriculum.evaluation_gates()
         results = {}
         t_eval = time.perf_counter()
-        for opp_type in (gates or {'smart_heuristic': None}):
+        eval_opponents = dict(gates or {'smart_heuristic': None})
+        eval_opponents.setdefault('random', None)
+        for opp_type in eval_opponents:
             results[opp_type] = play_evaluation_games(
                 agent1, make_eval_opponent(opp_type), EVAL_GAMES, device,
-                full_observability=curriculum.get_observability_rate(),
-                max_turns=PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS))
+                full_observability=False, max_turns=DEFAULT_MAX_TURNS)
         curriculum.record_evaluation({k: r['win_rate'] for k, r in results.items()})
         metrics.setdefault('eval_history', []).append(
             {'episode': completed_episodes, 'phase': phase, 'global_step': global_step,
              'results': results, 'gates': gates})
         summary = ", ".join(f"{k} {r['wins']}W/{r['losses']}L/{r['draws']}D"
-                            + (f" (gate {gates[k]:.0%})" if gates else "") for k, r in results.items())
+                            + (f" (gate {gates[k]:.0%})" if gates and k in gates else "")
+                            + (f" [revealed attacks {r['revealed_attacks']}: lost {r['revealed_lost'] / r['revealed_attacks']:.0%}]"
+                               if r.get('revealed_attacks') else "") for k, r in results.items())
         tqdm.write(f"[EVAL] episode {completed_episodes}, phase {phase}: {summary} "
                    f"[{time.perf_counter() - t_eval:.0f}s]")
     
+    # --- COLD START FROM DEMONSTRATIONS (DQfD) ---
+    from settings.training_config import (COLD_START_ENABLED, COLD_START_GAMES, COLD_START_DEMO_CAPACITY,
+                                          COLD_START_PRETRAIN_UPDATES, DEFAULT_MAX_TURNS)
+    if COLD_START_ENABLED and COLD_START_GAMES > 0:
+        t_demo = time.perf_counter()
+        agent1.enable_demonstrations(COLD_START_DEMO_CAPACITY)
+        demo = record_demonstrations(
+            agent1, HeuristicOpponent(device=device, player_id=1),
+            [make_eval_opponent('random'), make_eval_opponent('heuristic')], COLD_START_GAMES, device,
+            make_shaper=lambda: create_unified_reward_shaper(player_id=1, config=master_reward_config),
+            max_turns=DEFAULT_MAX_TURNS)
+        print(f"[COLD START] {demo['games']} heuristic games ({demo['wins']}W/{demo['losses']}L/{demo['draws']}D): "
+              f"{demo['transitions']} demonstration transitions [{time.perf_counter() - t_demo:.0f}s]")
+        if start_episode == 0:  # a resumed network has been pre-trained already
+            t_pre, pre_losses = time.perf_counter(), []
+            for _ in range(COLD_START_PRETRAIN_UPDATES):
+                loss = agent1.replay(demo_only=True)
+                if loss is not None:
+                    pre_losses.append(loss)
+            metrics['cold_start'] = {**demo, 'pretrain_updates': len(pre_losses),
+                                     'pretrain_loss_first': pre_losses[:50], 'pretrain_loss_last': pre_losses[-50:]}
+            if pre_losses:
+                print(f"[COLD START] {len(pre_losses)} pre-training updates, loss {np.mean(pre_losses[:50]):.3f} -> "
+                      f"{np.mean(pre_losses[-50:]):.3f}, margin loss {agent1.last_margin_loss:.3f} "
+                      f"[{time.perf_counter() - t_pre:.0f}s]")
+
+    # --- ASYNCHRONOUS LEARNER: agent1's updates on a background thread ---
+    from settings.training_config import ASYNC_LEARNER, ASYNC_MAX_LAG
+    if ASYNC_LEARNER and agent1.history_embedding_size:
+        print("[INFO] Asynchronous learner off: AAREN's supervised training shares the network")
+    elif ASYNC_LEARNER:
+        async_learner = AsyncLearner(agent1, max_lag=ASYNC_MAX_LAG)
+        print(f"[INFO] Asynchronous learner: updates run beside the games (at most {async_learner.max_lag} owed)")
+
     # Progress bar - updates based on completed episodes
     pbar = tqdm(total=num_episodes, initial=completed_episodes, desc="Training Episodes", dynamic_ncols=True)
     
@@ -490,7 +524,6 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
             p1_indices = [i for i in range(num_envs) if lane_current_player[i] == 1]
             p2_indices = [i for i in range(num_envs) if lane_current_player[i] == -1]
             
-            import time
             profiling = {"p1_act": 0.0, "p2_act": 0.0, "env_step": 0.0, "reward": 0.0, "aaren": 0.0, "replay": 0.0, "other": 0.0}
             t_start = time.perf_counter()
             
@@ -731,30 +764,40 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                     lane_current_player[lane_i] = new_state.current_player
             
             t3 = time.perf_counter()
-            if global_step - last_replay_step >= REPLAY_UPDATE_INTERVAL:
-                loss1 = agent1.replay(episode=completed_episodes)
-                last_replay_step = global_step
-                
-                if loss1:
-                    metrics['losses_p1'].append(loss1)
-                    metrics['loss_steps_p1'].append(global_step)
-                    
+            # One update per REPLAY_UPDATE_INTERVAL learner moves, however many lanes moved this
+            # iteration (the remainder carries over). One update per iteration at most, as before,
+            # tied the replay ratio to the lane count: 32 lanes would have halved it.
+            # With the async learner the owed updates are handed over and the losses of finished
+            # ones collected (request() waits once more than ASYNC_MAX_LAG are owed).
+            p1_losses, owed = [], 0
+            while global_step - last_replay_step >= REPLAY_UPDATE_INTERVAL:
+                last_replay_step += REPLAY_UPDATE_INTERVAL
+                if async_learner is None:
+                    loss1 = agent1.replay(episode=completed_episodes)
+                    if loss1:
+                        p1_losses.append(loss1)
+                else:
+                    owed += 1
+            if async_learner is not None:
+                if owed:
+                    async_learner.request(owed, episode=completed_episodes)
+                p1_losses = async_learner.drain_losses()
+            for loss1 in p1_losses:
+                metrics['losses_p1'].append(loss1)
+                metrics['loss_steps_p1'].append(global_step)
+
             if curriculum and curriculum.current_phase.value >= 4:
-                if global_step - getattr(agent2, 'last_replay_step_offset', 0) >= REPLAY_UPDATE_INTERVAL:
-                    if not hasattr(agent2, 'last_replay_step_offset') or agent2.last_replay_step_offset == 0:
-                        agent2.last_replay_step_offset = global_step + (REPLAY_UPDATE_INTERVAL // 2)
-                        loss2 = None
-                    else:
-                        loss2 = agent2.replay(episode=completed_episodes)
-                        agent2.last_replay_step_offset = global_step
-                        if loss2 and 'losses_p2' not in metrics:
-                            metrics['losses_p2'] = []
-                            metrics['loss_steps_p2'] = []
-                        if loss2:
-                            metrics['losses_p2'].append(loss2)
-                            metrics['loss_steps_p2'].append(global_step)
-            
-            if global_step - last_replay_step == 0 and 'loss1' in locals() and loss1:
+                if not getattr(agent2, 'last_replay_step_offset', 0):
+                    # Agent 2's updates run half an interval after Agent 1's
+                    agent2.last_replay_step_offset = global_step + (REPLAY_UPDATE_INTERVAL // 2)
+                while global_step - agent2.last_replay_step_offset >= REPLAY_UPDATE_INTERVAL:
+                    agent2.last_replay_step_offset += REPLAY_UPDATE_INTERVAL
+                    loss2 = agent2.replay(episode=completed_episodes)
+                    if loss2:
+                        metrics.setdefault('losses_p2', []).append(loss2)
+                        metrics.setdefault('loss_steps_p2', []).append(global_step)
+
+            for loss1 in p1_losses:
                 for i in range(num_envs):
                     if not dones[i]:
                         lane_episode_loss_sum_p1[i] += loss1
@@ -770,7 +813,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
             # Target networks: each agent copies its online network into its target every
             # TARGET_UPDATE_INTERVAL gradient updates (RainbowAgent.replay)
 
-            # --- CURRICULUM: EVALUATION GATES AND PHASE CAPS ---
+            # --- OPPONENT SCHEDULE: EVALUATION GATES AND STAGE CAPS ---
             # (The thesis loop checked training win rates when completed_episodes % 50 == 0, which
             # several lanes finishing in one step can skip past or repeat.)
             if curriculum and CURRICULUM_ENABLED and completed_episodes >= next_eval_episode:
@@ -785,30 +828,19 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                         tqdm.write(f"\n[PHASE] TRANSITION: {old_phase.name} -> {curriculum.current_phase.name} ({reason})")
                         curriculum.save_state()
                         
-                        # Update observability (the rate, as at start-up; the agent keeps reading its
-                        # AAREN planes, so use_full_obs stays False)
-                        parallel_env.set_full_observability(curriculum.get_observability_rate())
-                        
-                        # Update max turns for new phase
-                        from settings.training_config import PHASE_MAX_TURNS, DEFAULT_MAX_TURNS
-                        new_max_turns = PHASE_MAX_TURNS.get(curriculum.current_phase.value, DEFAULT_MAX_TURNS)
-                        parallel_env.set_max_turns(new_max_turns)
-                        tqdm.write(f"[INFO] Max turns updated to {new_max_turns}")
-                        
-                        # Update reward shaping phases
-                        for dr, p2r in zip(lane_dist_rewards, lane_p2_shapers):
-                            dr.set_phase(curriculum.current_phase.value)
-                            p2r.set_phase(curriculum.current_phase.value)
-                        
+                        # Only the opponents change: the game, its limits and the shaping
+                        # stay as they are (the thesis switched all three here).
                         # Agent2 starts self-play from agent1's weights (it has not trained before Phase 4)
                         if curriculum.current_phase.value == 4 and old_phase.value < 4:
-                            agent2.q_network.load_state_dict(agent1.q_network.state_dict())
-                            agent2.target_network.load_state_dict(agent1.target_network.state_dict())
+                            with weights_still():
+                                agent2.q_network.load_state_dict(agent1.q_network.state_dict())
+                                agent2.target_network.load_state_dict(agent1.target_network.state_dict())
                             tqdm.write("[INFO] Agent 2 initialised from Agent 1 for self-play")
             
             # --- LR SCHEDULER STEP (per fixed step interval) ---
             if agent1.scheduler and global_step % 1000 == 0:
-                agent1.scheduler.step()
+                with weights_still():
+                    agent1.scheduler.step()
             if hasattr(agent2, 'scheduler') and agent2.scheduler and global_step % 1000 == 0:
                 if curriculum and curriculum.current_phase.value >= 4:
                     agent2.scheduler.step()
@@ -854,15 +886,16 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                 metrics_tracker.set_global_step(global_step)
 
                 # Use Checkpointer for save operations
-                checkpointer.save_checkpoint(
-                    episode=save_episode,
-                    agent1=agent1,
-                    agent2=agent2,
-                    league_manager=league_manager,
-                    curriculum=curriculum if CURRICULUM_ENABLED else None,
-                    metrics_tracker=metrics_tracker,
-                    league_interval=LEAGUE_SAVE_INTERVAL
-                )
+                with weights_still():
+                    checkpointer.save_checkpoint(
+                        episode=save_episode,
+                        agent1=agent1,
+                        agent2=agent2,
+                        league_manager=league_manager,
+                        curriculum=curriculum if CURRICULUM_ENABLED else None,
+                        metrics_tracker=metrics_tracker,
+                        league_interval=LEAGUE_SAVE_INTERVAL
+                    )
                 
                 tqdm.write(f"[SAVE] Models saved for episode {save_episode}")
                 
@@ -902,9 +935,16 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                     f"[P1:{profiling['p1_act']:.2f} P2:{profiling['p2_act']:.2f} Env:{profiling['env_step']:.2f} Rep:{profiling['replay']:.2f}]"
                 )
                 pbar.set_postfix_str(postfix_str, refresh=False)
-            
+
+        if async_learner is not None:  # the last owed updates run, and a learner error surfaces here
+            async_learner.stop(finish=True)
+            async_learner = None
+
     except KeyboardInterrupt:
         print("\n\n[INFO] Training interrupted by user. Saving full state for seamless resumption...")
+        if async_learner is not None:
+            async_learner.stop(finish=True)  # the owed updates run; the saved state is a synchronous one
+            async_learner = None
         stop_episode = completed_episodes
         metrics_tracker.set_global_step(global_step)
         archive_path = checkpointer.save_full_state(
@@ -921,6 +961,11 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
         traceback.print_exc()
         raise  # a crashed run must not look like a finished one (exit code, tests)
     finally:
+        if async_learner is not None:  # the loop failed: end the thread without masking that error
+            try:
+                async_learner.stop(finish=False)
+            except Exception as e:
+                print(f"[WARN] The asynchronous learner also failed: {e}")
         # Crucial fix for multiprocessing connection crashes
         print("\n[INFO] Shutting down parallel environments...")
         parallel_env.close()

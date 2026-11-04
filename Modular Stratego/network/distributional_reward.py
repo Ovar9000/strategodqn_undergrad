@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from environment.piece import PieceType
 from environment.game_state import GameState
 from environment.board import HIDDEN_PIECE
-from settings.training_config import GAMMA
+from settings.training_config import GAMMA, POTENTIAL_WEIGHTS
 
 # Piece rank values for reward calculations (1-10 scale)
 PIECE_RANKS = {
@@ -68,14 +68,14 @@ def compute_potential(board: torch.Tensor, player_id: int) -> float:
     Game-progress potential Φ(s) of `board` as `player_id` sees it (its own view: enemy pieces it
     cannot see are HIDDEN_PIECE; a fully observable board shows every rank).
 
-    Higher Φ ⟹ closer to winning.  Components (weights 0.4 / 0.15 / 0.1 / 0.35):
+    Higher Φ ⟹ closer to winning.  Components (weights POTENTIAL_WEIGHTS, in this order):
       1. Material advantage: own − enemy rank-weighted material over a full army's material;
          a hidden enemy piece counts as UNKNOWN_PIECE_RANK
       2. Territorial penetration: deepest offensive piece (rank <= Captain) toward the enemy side
       3. Information: share of the enemy pieces on the board whose rank the view shows
       4. Offensive proximity: closest offensive piece to the enemy back rank
 
-    Φ ∈ [−0.4, 1].
+    Φ ∈ [−w_material, sum of the weights] (potential_range).
     """
     # One pass over the board as Python ints (per-cell tensor .item() calls were the cost here)
     my_material = 0.0
@@ -119,12 +119,18 @@ def compute_potential(board: torch.Tensor, player_id: int) -> float:
     proximity_score = 1.0 - (min_dist / 10.0)  # ∈ [0, 1]
 
     # ── Combine ──────────────────────────────────────────────────────
-    potential = (0.4 * material_score +
-                 0.15 * best_penetration +
-                 0.1 * info_score +
-                 0.35 * proximity_score)
+    w_material, w_penetration, w_info, w_proximity = POTENTIAL_WEIGHTS
+    potential = (w_material * material_score +
+                 w_penetration * best_penetration +
+                 w_info * info_score +
+                 w_proximity * proximity_score)
 
     return potential
+
+
+def potential_range() -> Tuple[float, float]:
+    """The bounds of compute_potential under POTENTIAL_WEIGHTS (every term but material is >= 0)."""
+    return -POTENTIAL_WEIGHTS[0], float(sum(POTENTIAL_WEIGHTS))
 
 
 @dataclass
@@ -177,7 +183,7 @@ class UnifiedRewardShaper:
     """
     Shaping reward of one side's transitions (each from its own view to its own view).
 
-      - PBRS: γΦ(s') − Φ(s), Φ(terminal) = 0; scaled by the curriculum phase
+      - PBRS: γΦ(s') − Φ(s), Φ(terminal) = 0, with a constant weight
       - Optional non-potential terms (off by default): combat bonuses, oscillation, move
         diversity and stalemate penalties
     """
@@ -186,7 +192,6 @@ class UnifiedRewardShaper:
         self.player_id = player_id
         self.config = config or StrategoRewardConfig()
         self.device = device
-        self.current_phase = 1  # Default to Phase 1 (Physics of War)
         self.gamma = GAMMA
         self.reset()
 
@@ -198,27 +203,6 @@ class UnifiedRewardShaper:
 
         # Move diversity tracking
         self.recent_moves: deque = deque(maxlen=self.config.diversity_window)
-
-    def set_phase(self, phase: int):
-        """Update the current curriculum phase to scale shaping rewards."""
-        self.current_phase = phase
-
-    def get_shaping_multiplier(self) -> float:
-        """
-        Calculate the multiplier for shaping rewards based on the current phase.
-        Phase 1: 1.0 (Full shaping to learn basic physics of war)
-        Phase 2: 0.5 (Steep early drop to force flag capture focus)
-        Phase 3: 0.2 (Fading out)
-        Phase 4-5: 0.0 (Pure terminal reward only)
-        """
-        if self.current_phase == 1:
-            return 1.0
-        elif self.current_phase == 2:
-            return 0.5
-        elif self.current_phase == 3:
-            return 0.2
-        else:
-            return 0.0
 
     def _count_oscillations(self, dest: Tuple[int, int], source: Tuple[int, int]) -> int:
         """
@@ -267,11 +251,13 @@ class UnifiedRewardShaper:
         reward_components: Dict[str, float] = {}
 
         # ── 1. PBRS: γΦ(s') − Φ(s), Φ(terminal) = 0 ─────────────────
-        shaping_mult = self.get_shaping_multiplier()
-        if shaping_mult > 0 and self.config.pbrs_weight:
+        # The weight is the same in every stage. The thesis cut it per curriculum phase
+        # (1.0 / 0.5 / 0.2 / 0), which changed the reward, and so every learned value, at each
+        # transition; PBRS leaves the optimal policy unchanged, so there is nothing to anneal.
+        if self.config.pbrs_weight:
             next_potential = 0.0 if done else self.potential(current_state)
             pbrs_reward = self.gamma * next_potential - self.potential(previous_state)
-            reward_components['pbrs'] = pbrs_reward * self.config.pbrs_weight * shaping_mult
+            reward_components['pbrs'] = pbrs_reward * self.config.pbrs_weight
 
         (r_from, c_from), (r_to, c_to) = action
         source = (r_from, c_from)
@@ -290,9 +276,9 @@ class UnifiedRewardShaper:
                 # (the thesis code tested the values 1/10 and 3/11 here, i.e. Flag vs General and
                 # Scout vs Marshal, so the Spy and Miner bonuses were never paid for their events)
                 if abs(moving_val) == PieceType.SPY.value and abs(target_val) == PieceType.MARSHAL.value:
-                    reward_components['spy_marshal'] = cfg.spy_marsh_bonus * shaping_mult
+                    reward_components['spy_marshal'] = cfg.spy_marsh_bonus
                 if abs(moving_val) == PieceType.MINER.value and abs(target_val) == PieceType.BOMB.value:
-                    reward_components['miner_bomb'] = cfg.miner_bomb_bonus * shaping_mult
+                    reward_components['miner_bomb'] = cfg.miner_bomb_bonus
 
         # ── 3. Oscillation Penalty (A→B→A detection) ─────────────────
         if cfg.oscillation_penalty:

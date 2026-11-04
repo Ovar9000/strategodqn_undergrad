@@ -16,8 +16,8 @@ Experience.__new__.__defaults__ = (None, None, None)  # Make snapshot fields opt
 
 
 def pack_state(state, device, float_dtype):
-    """Storage form of a state. Observation planes lie in [0, 1] (planes 0-26 are binary, 27-29
-    fractions), so they are kept as uint8 in 1/255 steps: binary planes exactly, fractions to
+    """Storage form of a state. Observation planes lie in [0, 1] (planes 27-29 are fractions, the
+    rest binary), so they are kept as uint8 in 1/255 steps: binary planes exactly, fractions to
     within 1/510. Anything outside [0, 1] is kept as floats."""
     if not isinstance(state, torch.Tensor):
         state = torch.tensor(state, dtype=torch.float32)
@@ -114,6 +114,51 @@ class StandardReplayBuffer:
     def load_state_dict(self, state_dict):
         """Load state from dict."""
         self.buffer = deque(state_dict['buffer'], maxlen=self.capacity)
+
+
+DemoExperience = namedtuple('DemoExperience', ['state', 'action', 'reward', 'next_state', 'done', 'next_legal',
+                                               'legal'])
+
+
+class DemonstrationBuffer:
+    """
+    Transitions of the demonstrator's games for the cold start (DQfD, Hester et al. 2018). Kept
+    apart from the replay memory, so the agent's own experience never pushes them out, and sampled
+    uniformly. Each one also keeps the legal mask of its state, over which the large-margin loss
+    compares the demonstrated action with the others.
+    """
+    def __init__(self, capacity, device='cuda'):
+        self.capacity = capacity
+        self.device = device
+        self.buffer = deque(maxlen=capacity)
+        self.store_on_gpu = (device != 'cpu' and device != torch.device('cpu'))
+
+    def add(self, state, action, reward, next_state, done, next_legal=None, legal=None, **_):
+        store_device = self.device if self.store_on_gpu else 'cpu'
+        self.buffer.append(DemoExperience(pack_state(state, store_device, torch.float32), int(action), float(reward),
+                                          pack_state(next_state, store_device, torch.float32), bool(done),
+                                          next_legal, legal))
+
+    def sample(self, batch_size):
+        """states, actions, rewards, next_states, dones, next-state legal masks (None if none were
+        stored) and the (batch, NUM_ACTIONS) legal masks of the states (all True where unknown)."""
+        batch = random.sample(self.buffer, batch_size)
+        states = unpack_states([e.state for e in batch], self.device)
+        actions = torch.tensor([e.action for e in batch], dtype=torch.long, device=self.device)
+        rewards = torch.tensor([e.reward for e in batch], dtype=torch.float32, device=self.device)
+        next_states = unpack_states([e.next_state for e in batch], self.device)
+        dones = torch.tensor([e.done for e in batch], dtype=torch.float32, device=self.device)
+        next_legal = unpack_legal_masks([e.next_legal for e in batch], NUM_ACTIONS, self.device)
+        legal = unpack_legal_masks([e.legal for e in batch], NUM_ACTIONS, self.device)
+        if legal is None:
+            legal = torch.ones(batch_size, NUM_ACTIONS, dtype=torch.bool, device=self.device)
+        return states, actions, rewards, next_states, dones, next_legal, legal
+
+    def __len__(self):
+        return len(self.buffer)
+
+    def clear(self):
+        self.buffer.clear()
 
 
 class SumTree:
@@ -214,12 +259,15 @@ class PrioritizedReplayBuffer:
         self.max_priority = 1.0  # largest priority given so far, already raised to alpha
         
         self.tree = SumTree(capacity)
+        # Per-slot priority multiplier kept across priority updates and not corrected by the
+        # importance-sampling weights (1 = an ordinary transition)
+        self.boosts = np.ones(capacity, dtype=np.float32)
         self.store_on_gpu = (device != 'cpu' and device != torch.device('cpu'))
         self.use_float16 = use_float16 and self.store_on_gpu
         self.storage_dtype = torch.float16 if self.use_float16 else torch.float32
         
     def add(self, state, action, reward, next_state, done, priority=None, is_winning_experience=False, is_battle=False,
-            history_snapshot=None, next_history_snapshot=None, next_legal=None):
+            history_snapshot=None, next_history_snapshot=None, next_legal=None, boost=1.0):
         """Add experience (uint8 states, see pack_state) with priority boost for important events.
         
         Args:
@@ -230,6 +278,7 @@ class PrioritizedReplayBuffer:
             history_snapshot: AAREN history snapshot for this state (stored on CPU)
             next_history_snapshot: AAREN history snapshot for next_state (stored on CPU)
             next_legal: np.packbits legal-action mask of next_state (None: every action allowed)
+            boost: priority multiplier kept for the transition's whole stay (see self.boosts)
         """
         store_device = self.device if self.store_on_gpu else 'cpu'
         state_t = pack_state(state, store_device, self.storage_dtype)
@@ -258,8 +307,9 @@ class PrioritizedReplayBuffer:
         if is_battle:
             priority *= 2.5  # 2.5x priority boost for battles
         
-        self.tree.add(priority, exp)
-    
+        self.boosts[self.tree.write_idx] = boost
+        self.tree.add(priority * boost, exp)
+
     def sample(self, batch_size):
         """
         Sample batch with priorities.
@@ -286,8 +336,10 @@ class PrioritizedReplayBuffer:
         if len(batch) == 0:
             return None
         
-        # Compute importance sampling weights
-        sampling_probs = np.array(priorities) / self.tree.total()
+        # Compute importance sampling weights. The persistent boosts are left uncorrected: they
+        # are meant to change how much those transitions count, not only how often they are drawn.
+        boosts = self.boosts[np.array(indices) - self.capacity + 1]
+        sampling_probs = np.array(priorities) / boosts / self.tree.total()
         weights = (self.tree.n_entries * sampling_probs) ** (-self.beta)
         weights = weights / weights.max()  # Normalize
         
@@ -313,12 +365,14 @@ class PrioritizedReplayBuffer:
                 next_history_snapshots, next_legal)
     
     def update_priorities(self, indices, td_errors):
-        """Update priorities based on TD-errors."""
+        """Update priorities from the per-transition errors (the learner passes the C51 KL)."""
         for idx, td_error in zip(indices, td_errors):
             priority = (abs(td_error) + self.epsilon) ** self.alpha
             self.max_priority = max(self.max_priority, priority)
+            if 0 <= idx - self.capacity + 1 < self.capacity:
+                priority *= self.boosts[idx - self.capacity + 1]
             self.tree.update(idx, priority)
-    
+
     def anneal_beta(self, episode):
         """Anneal beta from start to end over specified episodes."""
         fraction = min(episode / self.beta_anneal_episodes, 1.0)
@@ -329,6 +383,7 @@ class PrioritizedReplayBuffer:
     
     def clear(self):
         self.tree = SumTree(self.capacity)
+        self.boosts = np.ones(self.capacity, dtype=np.float32)
         self.max_priority = 1.0
 
     def state_dict(self):
@@ -338,6 +393,7 @@ class PrioritizedReplayBuffer:
             'alpha': self.alpha,
             'beta': self.beta,
             'max_priority': self.max_priority,
+            'boosts': self.boosts,
             'beta_start': self.beta_start,
             'beta_end': self.beta_end,
             'beta_anneal_episodes': self.beta_anneal_episodes
@@ -349,6 +405,8 @@ class PrioritizedReplayBuffer:
         self.alpha = state_dict.get('alpha', self.alpha)
         self.beta = state_dict.get('beta', self.beta)
         self.max_priority = state_dict.get('max_priority', self.max_priority)
+        boosts = state_dict.get('boosts')
+        self.boosts = np.asarray(boosts, dtype=np.float32) if boosts is not None else np.ones(self.capacity, dtype=np.float32)
         self.beta_start = state_dict.get('beta_start', self.beta_start)
         self.beta_end = state_dict.get('beta_end', self.beta_end)
         self.beta_anneal_episodes = state_dict.get('beta_anneal_episodes', self.beta_anneal_episodes)
@@ -368,14 +426,16 @@ class NStepBuffer:
         self.gamma_powers = [gamma ** i for i in range(n_steps)]
     
     def add(self, state, action, reward, next_state, done,
-            history_snapshot=None, next_history_snapshot=None, next_legal=None):
+            history_snapshot=None, next_history_snapshot=None, next_legal=None, legal=None, is_battle=False):
         """
         Add transition and return n-step transition if ready.
         Returns: (n_step_state, action, n_step_reward, n_step_next_state, done,
-                  history_snapshot, next_history_snapshot, next_legal) or None
+                  history_snapshot, next_history_snapshot, next_legal, legal, is_battle) or None,
+        legal being the packed legal mask of n_step_state (demonstrations only, else None) and
+        is_battle the flag of the first step (its action started a battle)
         """
         self.buffer.append((state, action, reward, next_state, done,
-                            history_snapshot, next_history_snapshot, next_legal))
+                            history_snapshot, next_history_snapshot, next_legal, legal, is_battle))
         
         # Episode ended: return the oldest n-step transition now; the shorter (truncated, terminal)
         # ones starting at the later steps stay in the buffer for flush()
@@ -396,7 +456,7 @@ class NStepBuffer:
             return None
         
         # Get first transition's state, action, and history snapshot
-        first_state, first_action, _, _, _, first_hist, _, _ = self.buffer[0]
+        first_state, first_action, _, _, _, first_hist, _, _, first_legal, first_battle = self.buffer[0]
 
         # Compute n-step reward: r_1 + γr_2 + γ²r_3 + ...
         n_step_reward = 0.0
@@ -404,10 +464,10 @@ class NStepBuffer:
             n_step_reward += self.gamma_powers[i] * entry[2]
 
         # Get last transition's next_state, done, next_history_snapshot and next-state legal mask
-        _, _, _, last_next_state, last_done, _, last_next_hist, last_next_legal = self.buffer[-1]
+        _, _, _, last_next_state, last_done, _, last_next_hist, last_next_legal, _, _ = self.buffer[-1]
 
         return (first_state, first_action, n_step_reward, last_next_state, last_done, first_hist, last_next_hist,
-                last_next_legal)
+                last_next_legal, first_legal, first_battle)
     
     def flush(self):
         """Flush remaining partial trajectories (call at episode end)."""

@@ -120,7 +120,7 @@ Michelle Elija B. Santos}
 
 % can use execsummary or abstract
 \begin{abstract}
-This research presents MARQ, a Multi-Agent Rainbow Deep Q-Networks, designed to master imperfect information games through the board game Stratego. MARQ leverages a Deep Recurrent Q-Network (DRQN) architecture and league-based self-play training to address the large state space of Stratego and hidden information challenges. The architecture integrates an Attention as Recurrent Neural Network (AAREN) module that produces learned embeddings from observed opponent behavior, enabling implicit piece identity inference through end-to-end training. The system employs Distributional Reinforcement Learning with Noisy Networks to balance strategic unpredictability and stability. The methodology involves developing a game environment and training the AI agent through multi-channel state representations, incorporating AAREN-generated embeddings for hidden information modeling and weighted piece values computed through systematic power analysis to optimize decision making under uncertainty. A structured participant study introduces enthusiasts without prior Stratego experience to create a synchronized learning environment, combining quantitative metrics including win rate percentage, average game length, and decision-making speed, with qualitative usability assessments across performance, reliability, and applicability dimensions. Through this study MARQ aims to deliver strategic decisions comparable to human opponents.
+This research presents MARQ, a Multi-Agent Rainbow Deep Q-Networks, designed to master imperfect information games through the board game Stratego. MARQ combines a Rainbow Deep Q-Network with league-based self-play training to address the large state space of Stratego and its hidden information. The architecture integrates an Attention as Recurrent Neural Network (AAREN) module that produces learned embeddings from observed opponent behavior. AAREN is trained to predict the identity of revealed pieces, and the Q-network reads its embeddings as inputs for implicit piece identity inference. The system employs Distributional Reinforcement Learning with Noisy Networks to balance strategic unpredictability and stability. The methodology involves developing a game environment and training the AI agent through multi-channel state representations, incorporating AAREN-generated embeddings for hidden information modeling and weighted piece values computed through systematic power analysis to optimize decision making under uncertainty. A structured participant study introduces enthusiasts without prior Stratego experience to create a synchronized learning environment, combining quantitative metrics including win rate percentage, average game length, and decision-making speed, with qualitative usability assessments across performance, reliability, and applicability dimensions. Through this study MARQ aims to deliver strategic decisions comparable to human opponents.
 \end{abstract}
 
 \include{misc/dedication}
@@ -144,6 +144,7 @@ This research presents MARQ, a Multi-Agent Rainbow Deep Q-Networks, designed to 
 \include{chapters/recommendations}
 \include{chapters/AppendixA}
 \include{chapters/AppendixB}
+\include{chapters/AppendixC}
 % \include{chapters/conclusion} may also be used
 
 %\appendix

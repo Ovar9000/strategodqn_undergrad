@@ -1,0 +1,1165 @@
+\chapter{Implementation Log and Lessons Learned}
+\renewcommand{\thefigure}{C.\arabic{figure}}
+\renewcommand{\thetable}{C.\arabic{table}}
+\label{app:lessons}
+
+This appendix records the changes made to the training system after the thesis experiments,
+each with the evidence that motivated it and what it taught. Entries are kept in the order the
+work was done, and every entry follows the same pattern: the change, why it was made, and the
+lesson. New entries are added at the end.
+
+% ------------------------------------------------------------------------------------------
+\section{Narrowing the C51 support to $\pm 2$}
+
+\paragraph{Change.} The value support of the distributional head \cite{C51} was narrowed from
+$[-10, 10]$ to $[-2, 2]$ (51 atoms, so 0.08 per atom instead of 0.4).
+
+\paragraph{Why.} A return is the outcome ($+1$, $-1$ or the draw reward $-0.5$) plus the
+potential-based shaping $\gamma\Phi(s') - \Phi(s)$ \cite{NgPBRS}, which telescopes over a game to
+$-\Phi(s_0)$. With $\Phi \in [-0.4, 1]$ every return therefore lies in $[-2, 1.4]$; the returns
+observed in the formal\_2 run spanned $-1.54$ to $0.71$. The $\pm 10$ support was inherited from
+the thesis configuration, whose shaping was not potential-based. On it, the shaping of a capture
+(about 0.02 to 0.05) was a tenth of an atom: the head could hardly represent the difference
+between a good and a bad exchange.
+
+\paragraph{Lesson.} The support of a distributional critic is part of the reward design, not a
+default. It should be derived from the bounds of the return (here the telescoping of the
+shaping makes that exact) and checked against the returns a run actually produces.
+
+% ------------------------------------------------------------------------------------------
+\section{Measuring the average Q-value on the actions taken}
+
+\paragraph{Change.} The logged ``average Q'' is now the expected value of the action that was
+taken in each sampled replay transition.
+
+\paragraph{Why.} The thesis metric took the maximum over all 3600 actions. Nearly all of them are
+illegal in any given state and are never trained, so the maximum was an artefact: it read about
+$+2$ while the returns were about $-1$.
+
+\paragraph{Lesson.} With a large, mostly illegal action space, any statistic taken over all
+actions measures the untrained part of the network. Diagnostics must be restricted to actions
+that can occur.
+
+% ------------------------------------------------------------------------------------------
+\section{Diagnosing a flat value function}
+
+\paragraph{Observation.} After thousands of episodes of the formal\_2 run the agent still drew
+most games, and its Q-values barely distinguished good moves from bad ones.
+
+\paragraph{Diagnosis.} Two probes separated the possible causes. A \emph{clean-signal probe}
+trained the same network on synthetic transitions in which only the combat outcome determined the
+reward; it learned the difference quickly, so the learner itself (loss, target, optimiser) was
+sound. A \emph{same-state probe} then compared, in real positions, the values of a winning and a
+losing attack available in the same state. In the formal\_3 run at episode 1250 the winning attack
+was preferred in 68\% of such positions, but by a margin of 0.003, against a true difference of
+about 0.05. In real training the combat signal is small next to the noise: a winning attack is
+worth $+0.019$ of shaping and a losing one $-0.033$, while an ordinary move's shaping varies with
+a standard deviation of 0.02, and the outcome arrives hundreds of moves later.
+
+\paragraph{Lesson.} When a reinforcement learner does not learn, first test the learner on a
+problem whose answer is known; if it passes, the problem is in the signal (reward scale, support,
+credit assignment), not in the optimisation. Probes that compare actions \emph{within the same
+state} are far more informative than averages over states.
+
+\paragraph{Operational note.} A run that ends with exit code 1 and no Python traceback was
+killed from outside the process (here by memory pressure), not by a bug in the training code.
+
+% ------------------------------------------------------------------------------------------
+\section{Making the training loop faster}
+
+\paragraph{Changes.}
+\begin{itemize}
+  \item \textbf{Batched evaluation.} The evaluation games now run side by side, with one network
+        call per side per round instead of one call per position. An evaluation of
+        $40 + 40$ games went from 363\,s to 143\,s.
+  \item \textbf{Cheaper replay.} The C51 loss needs the distribution of the action taken only,
+        and the target needs that of the Double-DQN action only. The network now returns raw
+        logits; the two needed actions are gathered first and normalised afterwards, instead of
+        normalising all $3600 \times 51$ outputs. One update went from 128.7\,ms to 97.5\,ms.
+  \item \textbf{More lanes at a constant replay ratio.} The loop used to perform at most one
+        gradient update per iteration, so adding parallel games silently lowered the number of
+        updates per move. It now performs one update per \texttt{REPLAY\_UPDATE\_INTERVAL}
+        learner moves however many lanes moved, which allowed 16 lanes instead of 8 (acting cost
+        per move fell from 2.0\,ms to 1.33\,ms).
+\end{itemize}
+
+\paragraph{Lesson.} Profile before optimising: replay was half of the step time and evaluation
+was serial, while the environment was below 10\%. And a ``speed'' setting such as the number of
+lanes can change the learning algorithm (here the replay ratio) unless the loop is written so
+that it cannot.
+
+% ------------------------------------------------------------------------------------------
+\section{Removing the curriculum's environment changes}
+
+\paragraph{Change.} The five-phase curriculum no longer changes the game. Every stage is played
+under fog of war, with the same turn limit (1500), the same no-battle draw rule (200 plies,
+also used in evaluation and the GUI) and the same, constant shaping weight. The stages remain
+only as an opponent schedule: random and scripted opponents first, then the stronger heuristic,
+then self-play and the league, advancing on evaluation gates as before.
+
+\paragraph{Why.} The thesis curriculum \cite{CurriculumLearning} changed the environment under
+the network at every transition. Phase 1 had full observability (the agent saw every enemy
+rank), and the shaping weight fell from 1.0 to 0.5, 0.2 and finally 0. Each of these changes the
+optimal values of the states the network has already learned: a value learned with the enemy's
+ranks visible is wrong under fog of war, and cutting the shaping weight changes every return.
+The network must then relearn what it knew, with the replay memory still full of transitions
+from the old rules, which is the setting in which catastrophic forgetting
+\cite{CatastrophicForgetting} occurs. Annealing the shaping also buys nothing: potential-based
+shaping leaves the optimal policy unchanged \cite{NgPBRS}, so there is no bias to remove. A
+smaller inconsistency was the draw rule: training drew after 100 plies without a battle and
+evaluation after 200, so the agent was graded under a rule it had not trained under.
+
+\paragraph{Lesson.} A curriculum should make the \emph{task} easier (weaker opponents), not
+change the \emph{rules} the values refer to. Anything the network's targets depend on
+(observability, reward, termination) must stay fixed across stages, and evaluation must use the
+same rules as training.
+
+% ------------------------------------------------------------------------------------------
+\section{Cold start from demonstrations}
+
+\paragraph{Change.} Before its first game the agent now learns from games in which the scripted
+heuristic plays its side, following Deep Q-learning from Demonstrations (DQfD) \cite{DQfD}; the
+idea of a short supervised ``cold start'' before reinforcement learning is also central to recent
+reasoning-model training \cite{DeepSeekR1}.
+\begin{enumerate}
+  \item The heuristic plays 100 games against the random and heuristic opponents under the
+        training rules. Its transitions are recorded exactly as the agent's own are (move plus
+        reply, PBRS shaping plus outcome, 5-step returns, mirror augmentation) into a separate
+        demonstration buffer that the agent's own experience never overwrites. Each one also
+        keeps the legal moves of its state.
+  \item The network is pre-trained on the demonstrations alone (5000 updates).
+  \item During training 10\% of each batch comes from the demonstrations, falling linearly to
+        0\% by episode 5000.
+  \item Demonstrated transitions also get the large-margin loss of DQfD,
+        \[
+          J_E(Q) = \max_{a \in \mathcal{A}(s)} \bigl[ Q(s,a) + \ell(a_E, a) \bigr] - Q(s, a_E),
+          \qquad \ell(a_E, a) = \begin{cases} 0 & a = a_E \\ 0.1 & a \neq a_E \end{cases}
+        \]
+        with the maximum over the legal moves $\mathcal{A}(s)$ only, added to the C51 loss with
+        weight 1.
+\end{enumerate}
+The earlier ``imitation'' option, which let the heuristic choose 10\% of the agent's moves in
+its first 2000 games, is switched off.
+
+\paragraph{Why.} A network trained from zero starts from random play, which against these
+opponents mostly ends in draws: at episode 1000 the formal\_3 run drew 32 of 40 evaluation games
+against the random opponent. Its first thousands of games therefore carry almost no outcome
+signal. The imitation option did not fix this: the heuristic's moves entered the replay memory
+like the agent's own, so the C51 loss learned what they were worth but nothing told the network
+to prefer them over the moves that were not played. The margin loss does exactly that. In a unit
+test with equal returns for every move, the C51 loss alone left the greedy move at chance, while
+with the margin loss the demonstrated move became the greedy one in at least 90\% of states.
+The margin is 0.1 (1.25 atoms of the $\pm 2$ support), comparable to the value of a capture; DQfD
+used 0.8 with rewards clipped to $\pm 1$. The demonstration share decays because the heuristic is
+a weak demonstrator, not an expert, and should not cap the agent.
+
+\paragraph{Result.} The 100 demonstration games took about three minutes; the heuristic won
+about half of them (52 wins, 26 losses, 22 draws in one collection) and they produced 38\,742
+transitions, mirror copies included. Pre-training costs about 107\,ms per update, so the 5000
+updates take about nine minutes. Whether the cold start speeds up learning has not yet been
+measured in a full run.
+
+% ------------------------------------------------------------------------------------------
+\section{The formal\_3 run and the start of formal\_4}
+
+\paragraph{formal\_3.} The formal\_3 run trained from zero with the $\pm 2$ support but still
+with the curriculum's environment changes and without the cold start. It was stopped at episode
+3500, never having left Phase~1. Its evaluations (40 greedy games per opponent every 500
+episodes) did not improve; against the random opponent they got worse:
+\begin{center}
+\begin{tabular}{rcc}
+\toprule
+Episode & vs random (W/L/D) & vs heuristic (W/L/D) \\
+\midrule
+500  & 8/14/18 & 1/37/2  \\
+1000 & 7/1/32  & 1/28/11 \\
+1500 & 6/2/32  & 1/32/7  \\
+2000 & 0/4/36  & 0/29/11 \\
+2500 & 5/8/27  & 2/30/8  \\
+3000 & 3/5/32  & 0/35/5  \\
+3500 & 1/3/36  & 0/35/5  \\
+\bottomrule
+\end{tabular}
+\end{center}
+The agent learned to avoid losing to the random opponent mainly by drawing, and it never won
+more than 2 of 40 games against the heuristic. Its games carried almost no outcome signal, which
+is the problem the cold start addresses.
+
+\paragraph{formal\_4.} formal\_4 starts from zero with every change above: the opponent schedule
+without environment changes, the cold start, the asynchronous learner and 16 lanes. Its cold
+start played the 100 demonstration games in 84\,s (the heuristic won 56, lost 24 and drew 20)
+and stored 35\,544 transitions. The 5000 pre-training updates took 271\,s (54\,ms per update with
+the GPU not shared with another run), and the large-margin loss fell to 0.068, below the margin
+of 0.1.
+
+\paragraph{formal\_4, first 1000 episodes.} The evaluations (40 greedy games per opponent) were,
+next to formal\_3 at the same episodes:
+\begin{center}
+\begin{tabular}{rcccc}
+\toprule
+ & \multicolumn{2}{c}{formal\_4} & \multicolumn{2}{c}{formal\_3} \\
+Episode & vs random & vs heuristic & vs random & vs heuristic \\
+\midrule
+500  & 16/16/8 & 10/17/13 & 8/14/18 & 1/37/2  \\
+1000 & 14/22/4 & 8/21/11  & 7/1/32  & 1/28/11 \\
+\bottomrule
+\end{tabular}
+\end{center}
+(wins/losses/draws). Against the heuristic formal\_4 won 8 to 10 games where formal\_3 won one,
+and it no longer drew most games against the random opponent. But it lost more than half of them
+instead, almost always by losing all its movable pieces, and it did not improve from episode 500
+to 1000, nor by episode 2500 (vs random 12/23/5, 12/25/3 and 15/22/3 at episodes 1500, 2000 and
+2500; vs heuristic 4/14/22, 5/19/16 and 6/16/18). formal\_4 also ran about 1.4 times as fast (1000 episodes in 45 minutes, against about
+64 for formal\_3).
+
+\paragraph{Diagnosis: attacks on revealed pieces.} A probe played 30 greedy games against the
+random opponent under the training rules and classified every attack by whether the attacked
+piece's rank was already known to the attacker:
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Player 1 & attacks per game & hidden target: won / lost & revealed target: won / lost \\
+\midrule
+heuristic (the demonstrator) & 39.1 & 39\% / 47\% & 77\% / 0\%  \\
+formal\_4, episode 250       & 41.7 & 45\% / 45\% & 26\% / 62\% \\
+formal\_4, episode 500       & 41.0 & 42\% / 43\% & 27\% / 63\% \\
+formal\_4, episode 1000      & 39.8 & 43\% / 42\% & 28\% / 63\% \\
+formal\_3, episode 1000      & 20.2 & 36\% / 48\% & 22\% / 72\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+Against hidden pieces the agent does as well as the heuristic. Against pieces whose rank it can
+see (the ranks of revealed enemy pieces are in the observation, and a test checks that they reach
+the network) it loses most of its attacks, while the heuristic never attacks a known piece it
+cannot beat. The cold start transferred how \emph{often} the heuristic attacks (about 40 attacks
+per game, twice formal\_3's), but not \emph{which} known pieces it attacks, and this was so from
+episode 250 on, so it was never learned rather than learned and forgotten.
+
+\paragraph{Test: pre-training on the demonstrations alone.} To see whether more imitation would
+teach the rule, a separate copy of the network was pre-trained on a fresh set of 100
+demonstration games (35\,198 transitions) with the cold start's losses, for 20\,000 updates
+instead of 5000, and probed in the same way. The agreement is the share of demonstration states
+in which the network's greedy legal move is the heuristic's:
+\begin{center}
+\begin{tabular}{rcccc}
+\toprule
+Updates & agreement & margin loss & revealed target: won / lost & hidden target: won / lost \\
+\midrule
+0      & 8.4\%  & --    & --          & --          \\
+5000   & 63.1\% & 0.072 & 28\% / 60\% & 41\% / 45\% \\
+10\,000 & 75.7\% & 0.051 & 28\% / 60\% & 44\% / 42\% \\
+20\,000 & 88.2\% & 0.027 & 31\% / 62\% & 42\% / 44\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+The network came to reproduce the heuristic's move in 88\% of the demonstration states, yet in its
+own games it lost as many attacks on revealed pieces as before. It also did worse against pieces
+it could see than against hidden ones, as a player would that picks its targets without regard to
+their visible rank: the enemy pieces that are revealed are mostly ones that survived an earlier
+battle, so they are stronger than average. Fitting the demonstrations, even closely, did not
+produce the rule that makes the heuristic's attacks good. (The agreement is measured on the
+demonstrations the network was trained on, so part of it may be memorisation.)
+
+\paragraph{Test: does the value of an attack respond to the target's rank?} In 300 real
+positions (random play, fog of war) where a piece of rank Miner to General could attack an
+adjacent enemy piece, the observation was edited at the target square only, showing the target
+as a revealed Scout (the attack wins), a revealed Marshal (the attack loses) or as hidden, and the
+network's value of that attack was compared across the three. The same edit was also applied
+while reading the value of a quiet move far from the target, as a control.
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+Network & $Q$ vs Scout & $Q$ vs Marshal & $Q$ vs hidden & Scout $-$ Marshal (positive in) \\
+\midrule
+untrained               & $-0.023$ & $-0.025$ & $-0.022$ & $+0.002$ (51\%) \\
+formal\_3, episode 3500  & $-0.642$ & $-0.644$ & $-0.628$ & $+0.001$ (46\%) \\
+formal\_4, episode 2500  & $+0.055$ & $+0.048$ & $+0.187$ & $+0.007$ (50\%) \\
+pre-trained, 20\,000 updates & $-0.140$ & $-0.172$ & $+0.074$ & $+0.032$ (59\%) \\
+\bottomrule
+\end{tabular}
+\end{center}
+The control moved by less than 0.01 in every case. The networks trained by reinforcement value
+an attack on a revealed Scout and on a revealed Marshal the same, no more apart than the untrained
+network does, although one wins a piece and the other loses one. They do respond to \emph{whether}
+the target is revealed (formal\_4 values attacking a hidden piece at $+0.19$ and a revealed one at
+about $+0.05$), but not to \emph{which} rank is revealed. The pre-trained network shows a small
+preference ($+0.03$), with a spread across positions (standard deviation 0.12) four times as
+large. The environment keeps a revealed piece's rank visible when it moves, and the ranks are in
+the observation, so the information is there: it is the training signal that has not made the
+networks use it. This is the combat signal of the earlier diagnosis: the shaping difference
+between winning and losing an exchange (a few hundredths) is no larger than the variation of
+an ordinary move's shaping, and the outcome comes hundreds of moves later.
+
+\paragraph{Measurement: the combat signal of the potential.} The shaping of Player-1
+transitions (its move plus the reply, as the trainer builds them; terminal transitions left out)
+was measured in 30 games against the random opponent, with the heuristic and with a random player
+as Player 1, for the current potential and for its material term alone,
+$\Phi_{\mathrm{mat}} = (\text{own} - \text{enemy material}) / 148$:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & current $\Phi$ & material only \\
+\midrule
+quiet move, mean / sd (random Player 1)        & $+0.0008$ / 0.015 & $0.0000$ / 0.0001 \\
+quiet move, mean (heuristic Player 1)          & $+0.0065$         & $0.0000$ \\
+attack on a revealed piece, won $-$ lost (random) & 0.043          & 0.061 \\
+\quad in standard deviations of a quiet move   & 2.9               & about 430 \\
+\quad in atoms of the $\pm 2$ support          & 0.53              & 0.76 \\
+attack on a hidden piece, won $-$ lost (heuristic) & 0.093         & 0.058 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Under the current potential an ordinary move is not neutral: the proximity and penetration terms
+reward advancing, so for the heuristic a quiet move is worth $+0.0065$ on average, and beating a
+revealed piece only $+0.011$. Every 5-step return also adds four more transitions of this
+variation (standard deviation about 0.02 each) to the difference between a won and a lost
+exchange of about 0.04. With the material term alone, a move without a battle is worth exactly
+nothing (up to the discount), so the only shaping left in a return is that of the battles in it,
+and a won exchange differs from a lost one by 0.06, about three-quarters of an atom. The
+information and proximity terms also explain why the networks prefer attacking hidden pieces:
+revealing a piece raises the information term whatever the result.
+
+\paragraph{Lesson.} A shaping potential with several heuristic terms makes every move carry
+reward, and that variation is noise to the decision the agent most needs to learn. Before tuning
+a learner, measure the reward difference between the decisions that matter, relative to the
+variation of the rest of the reward stream, and in the units the critic resolves.
+
+\paragraph{Lesson.} Imitation transfers the frequent, easy-to-see features of a demonstrator's
+play (here, attacking a lot) before the conditional rule behind them (attack a known piece only
+if it is weaker), and a high agreement with the demonstrator does not show that the rule was
+learned. A demonstration is worth checking for the specific decisions it was meant to teach, with
+a probe that classifies those decisions in the agent's own games, not only by win rate or by
+agreement on the demonstrations.
+
+\paragraph{Lesson.} An evaluation that only counts wins hides how a policy fails: formal\_3's
+win rate against the random opponent stayed low throughout, but its draws rising from 18 to 36
+of 40 showed that it was converging to passive play rather than failing to learn at all.
+
+\paragraph{Lesson.} Demonstrations stored as ordinary experience teach values, not preferences;
+to make a value learner imitate, the loss must rank the demonstrated action above the
+alternatives. And with a large, mostly illegal action space, that ranking has to be restricted to
+the legal moves, or it spends its effort pushing down actions that can never be played.
+
+% ------------------------------------------------------------------------------------------
+\section{A material-only potential (formal\_5)}
+
+\paragraph{Change.} The weights of the shaping potential's four terms (material, penetration,
+information, proximity) became a setting, \texttt{POTENTIAL\_WEIGHTS}, and were changed from
+$(0.4, 0.15, 0.1, 0.35)$ to $(1, 0, 0, 0)$:
+\[
+\Phi(s) = \frac{\text{own material} - \text{enemy material}}{148},
+\]
+with a hidden enemy piece still counted at the mean army rank of 3.7. Its range is $[-1, 1]$, and
+the support test now reads the range from the weights. $\Phi$ is 0 at the start of a game (both
+armies have 148 material, the hidden one counted at the mean), so the shaping of a whole game
+telescopes to zero, and a return still lies within the outcome reward plus or minus 1, inside the
+$\pm 2$ support. Everything else is formal\_4's configuration, including the cold start and the
+asynchronous learner. formal\_4 was stopped at episode 3000; its last evaluation had 17 wins,
+17 losses and 6 draws against the random opponent and 3 wins, 24 losses and 13 draws against the
+heuristic, with no gain since episode 1500.
+
+\paragraph{Why.} The measurement above: under the old potential an ordinary move carried a
+shaping reward that varied as much as the difference between winning and losing an exchange on a
+revealed piece, and the network did not learn to tell those exchanges apart. With material only,
+a move without a battle carries no shaping, and a won exchange is worth about three-quarters of
+an atom more than a lost one. The cost is that nothing rewards advancing or scouting any more
+until a battle happens; whether the agent still finds the enemy, or stalls into no-battle draws,
+is what formal\_5 has to show.
+
+\paragraph{Result, first 1000 episodes.} The cold start went as in formal\_4 (the heuristic won 58,
+lost 20 and drew 22 of the 100 demonstration games; the margin loss fell to 0.071). The
+evaluations were 20/16/4 and 9/30/1 against the random opponent and 3/18/19 and 9/19/12 against
+the heuristic at episodes 500 and 1000 (wins/losses/draws), against 16/16/8 and 14/22/4, 10/17/13
+and 8/21/11 for formal\_4. The agent did not stall: no-battle draws were 74 and 94 of the
+training games in the two blocks of 500, and games lasted 340 to 346 moves. It still lost
+mostly by running out of movable pieces (197 and 198 of 500 games), as formal\_4 did. So far the
+material-only potential has not changed how the agent loses. Two evaluations 500 episodes apart
+also differed by 11 wins out of 40 against the same opponent, which shows how wide the noise of a
+40-game evaluation is.
+
+\paragraph{Result, to episode 2750.} formal\_5 was stopped at episode 2750 to start formal\_6
+(Section~\ref{sec:formal6}) with the fixes found in the meantime. Its later evaluations were
+22/15/3, 17/22/1 and 16/20/4 against the random opponent and 9/24/7, 8/20/12 and 7/14/19 against
+the heuristic at episodes 1500, 2000 and 2500. formal\_4 had 12, 12 and 15 wins against the random
+opponent and 4, 5 and 6 against the heuristic at the same episodes. The material-only potential
+won a few more games against the heuristic, but by less than the noise of 40-game evaluations
+(about 3 wins), and neither run passed a gate. The potential was not the bottleneck it was
+suspected to be; the faults of the next sections were found while formal\_5 ran.
+
+\paragraph{Result, the revealed-piece probes.} The two probes of formal\_4 were repeated on the
+networks of formal\_5 (episode 2750) and formal\_4 (episode 3000). Both have 30 input planes, so
+they were run under the formal\_6 code with the agent built for 30 planes and given the first 30
+planes of the new encoding, whose layout is unchanged. Each played 30 greedy games as Player~1
+against the random opponent:
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & formal\_5, ep.\ 2750 & formal\_4, ep.\ 3000 & heuristic \\
+\midrule
+games won / lost / drawn               & 17 / 13 / 0 & 14 / 16 / 0 & 23 / 4 / 3 \\
+attacks on revealed pieces             & 378         & 339         & 270 \\
+\quad won / tied / lost                & 28 / 9 / 63\% & 30 / 11 / 59\% & 77 / 23 / 0\% \\
+attacks on hidden pieces, won / lost   & 43 / 43\%   & 44 / 42\%   & 39 / 47\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+A network whose checkpoint failed to load (a fresh one, through the silent fallback of
+\texttt{load\_model}) lost 66 to 67\% of its attacks on revealed pieces in the same games, so on
+this decision both trained networks are close to an untrained one. In the rank-swap test (300
+positions, the target shown as a revealed Scout or a revealed Marshal, everything else unchanged)
+formal\_5's value of the attack rose by $+0.0016$ for the Scout, positive in 49\% of positions,
+and formal\_4's by $+0.0011$, positive in 51\%, against a spread of the attack's value across
+positions of 0.06 to 0.09. With a won exchange worth about three-quarters of an atom more than a
+lost one in every return that contains it, 2750 episodes of material-only shaping did not make
+the network read the revealed rank at all. A reward signal that clear and that frequent should
+have been learnt, so the cause has to be sought in the learner or in what reaches it rather than
+in the reward. None of the faults of the next sections has yet been shown to explain it.
+
+\paragraph{Lesson.} When a change aimed at one failure leaves that failure exactly where it was,
+measure the failure directly before reading the win rates: the probe settled in minutes what
+three noisy evaluations could not. And a diagnostic that loads a checkpoint must fail loudly when
+the load fails; here a silent fallback to a fresh network gave plausible-looking numbers.
+
+% ------------------------------------------------------------------------------------------
+\section{Asynchronous learner}
+
+\paragraph{Change.} The gradient updates now run on a background thread with its own CUDA
+stream while the main loop chooses moves and steps the parallel games. This is the actor-learner
+split of Ape-X \cite{ApeX} and IMPALA \cite{IMPALA}, also used for large-scale asynchronous
+reinforcement learning of language models \cite{AReaL}, here within a single process:
+\begin{itemize}
+  \item The replay ratio is unchanged: the loop still owes one update per
+        \texttt{REPLAY\_UPDATE\_INTERVAL} learner moves and hands them to the learner. Once more
+        than \texttt{ASYNC\_MAX\_LAG} $= 2$ updates are owed it waits (back-pressure), so the
+        policy that acts is at most three updates behind the one being trained.
+  \item Acting reads a copy of the network that is refreshed after every update. The learner
+        must not share its network with the actor: the optimiser changes the weights in place,
+        and NoisyNet acting switches the network's noise and train/eval mode.
+  \item The replay memory, which both threads use, is behind a lock. Because the learner runs on
+        its own CUDA stream, it waits for the actor's stream before sampling and finishes its
+        reads before releasing the lock; otherwise a transition evicted by the actor could be
+        freed by the allocator while the learner's kernels were still reading it.
+  \item Anything that reads or replaces the learner's weights or optimiser state (checkpoints,
+        copying the network into the second agent, the learning-rate schedule) pauses the
+        learner first, and an error in the learner thread is re-raised in the training loop.
+\end{itemize}
+
+\paragraph{Result.} In two otherwise identical short runs (8 lanes, the cold start on, measured
+from the first gradient update over about 10\,000 learner moves, on a GPU shared with another
+training run) the synchronous trainer made 43.4 learner moves per second and the asynchronous one
+59.3, i.e.\ 1.37 times as fast. Both performed exactly 1313 gradient updates, so the replay ratio
+was the same.
+
+\paragraph{Lesson.} Asynchrony is only safe if every piece of shared state is accounted for: the
+weights (a separate acting copy), the replay memory (a lock), GPU memory on two streams (stream
+ordering and synchronisation), and the replay ratio (back-pressure). The last one matters most
+for reproducibility: without back-pressure an asynchronous learner changes the algorithm, not
+just its speed.
+
+% ------------------------------------------------------------------------------------------
+\section{What the falling loss of formal\_4 did and did not show}
+
+\paragraph{Observation.} Over the 3000 episodes of formal\_4 the C51 loss of Player~1 fell
+steadily while its evaluations did not improve. Per block of 500 training episodes (about 11\,500
+gradient updates each):
+\begin{center}
+\begin{tabular}{rcccc}
+\toprule
+Episodes & mean loss & mean $Q$ (action taken) & mean return & training games won (random / heuristic) \\
+\midrule
+0--500     & 3.63 & $-0.01$ & $-0.66$ & 34\% / 16\% \\
+500--1000  & 3.42 & $-0.02$ & $-0.59$ & 39\% / 18\% \\
+1000--1500 & 3.32 & $-0.06$ & $-0.63$ & 34\% / 18\% \\
+1500--2000 & 3.21 & $-0.14$ & $-0.60$ & 36\% / 20\% \\
+2000--2500 & 3.11 & $-0.22$ & $-0.57$ & 39\% / 21\% \\
+2500--3000 & 3.05 & $-0.28$ & $-0.51$ & 43\% / 22\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+The greedy evaluations over the same span won 40, 35, 30, 30, 38 and 43\% of the 40 games
+against the random opponent and 25, 20, 10, 13, 15 and 8\% against the heuristic (episodes 500
+to 3000). The run had the AAREN history planes switched off (\texttt{AAREN\_ENABLED} false: 30
+input planes), so it says nothing about AAREN.
+
+\paragraph{Reading.} The loss is the cross-entropy between the predicted return distribution and
+a target built from the network's own target copy; a distribution spread evenly over the 51 atoms
+scores $\ln 51 = 3.93$, about where the cold start left it (3.93). Most of the fall is the
+network making its distributions sharper and moving its values towards what it actually gets:
+the mean $Q$ of the actions taken went from $-0.01$ to $-0.28$, towards the mean return of about
+$-0.55$, i.e.\ it learned more accurately that it was losing. Across blocks of 100 episodes the
+loss and the training win rate correlated at $-0.49$, but the loss correlated with time at
+$-0.97$; once a linear trend was removed from both, the correlation was $-0.14$. The training
+games (with NoisyNet exploration on) did improve somewhat against the random opponent, from 34\%
+to 43\% of about 215 games per block, roughly two standard errors; the greedy evaluations of 40
+games did not show it.
+
+\paragraph{Lesson.} A falling TD or distributional loss shows that the critic fits its own
+moving targets better, not that the policy plays better; with a pessimistic, well-calibrated
+critic it falls while the agent keeps losing. Two quantities that both drift with training time
+correlate whatever their relation, so a loss--performance correlation should be computed on
+detrended (or differenced) curves before it is read as coupling. Progress has to be judged on
+evaluations against fixed opponents, with enough games for the difference to exceed its noise.
+
+% ------------------------------------------------------------------------------------------
+\section{Correcting the claims of the thesis chapters}
+
+\paragraph{Change.} The Methodology and Results chapters were revised where the code or the data
+did not support what they said. No reported number was changed; the readings of them were.
+\begin{itemize}
+  \item AAREN was described as trained end to end with the Q-network through a ``gradient
+        bridge'', $\epsilon \cdot W_{proj}(\mathbf{0})$ added to the stored embeddings. An affine
+        layer maps the zero vector to its bias, so the DQN loss reached only one of AAREN's 21
+        parameter tensors, and none that depends on the move history. AAREN was trained, in
+        effect, only by its supervised loss on revealed pieces, and the text now says so. In the
+        thesis code its embedding was also taken at the padding step of every shorter history
+        rather than at the history's last real step.
+  \item The self-play win rate of 49.88\% (against 24.97\% for the DQN) was read as the agent
+        doubling its strength. In self-play both sides are the same policy, and in both runs the
+        decisive games split almost evenly (24.97/24.99\% and 49.88/43.43\%). The win rate doubled
+        because the decisive share did (50\% to 93\%), and steps per win follows from that too.
+  \item The loss--win correlation of $-0.787$ was read as the loss becoming a reliable proxy for
+        play. It was computed on raw windowed curves. formal\_4 shows the raw correlation
+        ($-0.49$) shrinking to $-0.14$ once a linear trend is removed from both curves, while its
+        evaluations did not improve.
+  \item AAREN's 24.23\% accuracy was compared only with a uniform 8.3\% baseline over 12 types.
+        Scouts are 8 of the 40 pieces and 8 of the 33 movable ones, so always naming the most
+        common type would score about 20 to 24\%.
+  \item The logged average Q-values (0.70, 0.84, 1.84) were read as value resolution. They were
+        the maximum over all 3600 actions, the artefact of the second entry of this appendix.
+\end{itemize}
+The validation table now reads ``Not tested'', ``Not supported'', ``Inconclusive'', ``Supported''
+or ``Self-play only'' instead of ``Validated'' for every row. The Methodology chapter now lists all six
+Rainbow components and separates the thesis configuration from that of the formal runs.
+
+\paragraph{Why.} Re-reading formal\_4 against the chapters (previous entry). That run had AAREN
+switched off, yet the chapters presented the falling loss and the self-play results as validation
+of both the Rainbow learner and AAREN.
+
+\paragraph{Lesson.} A metric from symmetric self-play measures the draw rate, not strength; a
+correlation between two curves that both drift with time measures the drift; an accuracy needs
+the majority-class baseline, not the uniform one; and a claimed gradient path should be checked
+by listing which parameters actually receive a gradient. Each of these was cheap to check and
+reversed a claimed validation.
+
+% ------------------------------------------------------------------------------------------
+\section{Replay priorities from the cross-entropy}
+
+\paragraph{Observation.} The prioritized replay \cite{RainbowJMLR2021} sets a transition's priority to
+$(\ell + 10^{-6})^{0.6}$, with $\ell$ the C51 loss of that transition, which is the cross-entropy
+$-\sum_i m_i \log p_i$ between the projected target $m$ and the prediction $p$. The
+cross-entropy is the KL divergence plus the entropy of the target,
+$\mathrm{CE} = \mathrm{KL}(m \,\|\, p) + H(m)$. Rainbow prioritizes by the KL divergence, the part
+that measures how wrong the prediction is. $H(m)$ is large for every non-terminal transition,
+because its target is the network's own diffuse prediction one step on. It is at most $\ln 2$ for a
+terminal one, whose target is the outcome itself, split over the two nearest atoms.
+
+\paragraph{Measurement.} formal\_4's network of episode 3000 played 32 greedy games (against the
+random opponent and the heuristic, 8 won, 16 lost and 8 drawn). They were recorded through the
+trainer's 5-step and mirroring pipeline, which gave 13\,328 transitions; the rewards came from the
+current material-only potential. For each transition:
+\begin{center}
+\begin{tabular}{lrccc}
+\toprule
+Transitions & count & CE & $H(m)$ & KL \\
+\midrule
+terminal                              & 320   & 4.15 & 0.51 & 3.64 \\
+non-terminal, return with a battle    & 6790  & 3.76 & 3.73 & 0.02 \\
+non-terminal, no battle               & 6218  & 3.42 & 3.40 & 0.02 \\
+\bottomrule
+\end{tabular}
+\end{center}
+With the cross-entropy, the 95th percentile of the priority was 1.2 times the 5th. The terminal
+transitions, 2.4\% of the memory, held 2.6\% of the total priority, so they were sampled as
+often as under uniform replay. With the KL divergence the ratio would be 10.3. The terminal
+transitions would hold 40\% of the priority, about 16 times their share.
+
+The terminal KL of 3.64 also shows that, one move before the end of a game, the network's
+distribution put almost no mass near the actual outcome. Those 2.4\% of transitions are the only
+ones whose target is the game result rather than the network's own estimate. Under the
+cross-entropy priority the replay did nothing to make them count more.
+
+A second, smaller fault: the 2.5-fold priority boost for battles is decided by the newest step of
+a 5-step window. It therefore lands on the transition that \emph{starts} four moves before the
+battle, not on the one that starts with the attack. The mirrored copy of a transition gets no
+boost at all.
+
+\paragraph{Change.} Made for formal\_6 (Section~\ref{sec:formal6}); at the time of this entry, none. The proposed fix is to compute the priority from
+$\mathrm{CE} - H(m)$, and to decide the battle boost by the first step of the window. Whether this
+changes play is not yet measured in a run.
+
+\paragraph{Lesson.} A priority must measure surprise, not the size of the loss. With a
+distributional loss the two differ by the entropy of the target, which here was almost the whole
+loss and made prioritized replay uniform. The distribution of the priorities is cheap to check (the
+ratio of high to low percentiles, and the share held by the transitions that carry the outcome),
+and it should be checked once whenever the loss changes.
+
+% ------------------------------------------------------------------------------------------
+\section{An audit of the rest of the Rainbow learner}
+
+\paragraph{Observation.} Before changing the replay priorities, the rest of the learner was read
+and, where a doubt could be measured, probed on formal\_4's network of episode 3000.
+\begin{itemize}
+  \item \emph{Checked and correct:} the C51 projection, the Double DQN target over legal moves,
+        the dueling combination, the factorised NoisyNet layers, the per-lane 5-step buffers
+        (mirroring is applied after the $n$-step sum, so the two never mix), the flushing of
+        open returns at the end of a game, the move-plus-reply transitions, the asynchronous
+        learner's locking and weight copy, and the replay ratio (about 8 samples per stored
+        transition, the usual DQN ratio).
+  \item \emph{Instance normalisation and constant planes.} The backbone normalises every channel
+        over the board, and planes 27--29 (observability, no-battle counter, game progress) are
+        constant over the board, so they might have been normalised away. They are not. In 300
+        fog-of-war positions, raising the no-battle counter from 0 to 0.99 lowered the network's
+        value by 0.15 on average, as it should with a draw costing $-0.5$, and game progress
+        by 0.11. Removing one own piece changed it by 0.02. A fresh network learnt a target
+        from the counter plane equally well with and without the normalisation layers
+        (correlation 0.99 in both cases).
+  \item \emph{Dropout in the target.} The attention block has dropout 0.1 and the target network
+        is never put in evaluation mode, so its targets carry dropout noise. Dropout alone moved
+        the value of the greedy move by a standard deviation of 0.015, more than the NoisyNet
+        noise (0.010), and about a third of the spread of the values across a position's legal
+        moves (0.043).
+  \item \emph{How much NoisyNet explores.} With the acting noise on, the move played differed
+        from the greedy move in 4 to 6\% of positions (100 and 300 positions, 8 and 20 noise
+        samples).
+\end{itemize}
+
+\paragraph{Change.} Made for formal\_6 (Section~\ref{sec:formal6}); at the time of this entry, none. The proposed changes are the evaluation mode for the target
+network (or no dropout in the attention block) and the priority fix of the previous section.
+
+\paragraph{Lesson.} A suspicion about an architecture is cheap to test: perturb the input it
+concerns and see whether the output moves, or check whether a fresh network can fit a target
+that depends only on it. Here the plausible suspicion (normalisation erasing the counters) was
+wrong, and two quieter faults (an always-on dropout in the target, and priorities that do not
+prioritise) were real.
+
+% ------------------------------------------------------------------------------------------
+\section{What AAREN can add to the observation}
+
+\paragraph{Why it is off.} The formal runs set \texttt{AAREN\_ENABLED} to false, so the network sees
+the 30 observation planes only. No document records the reason; the code enforces two
+constraints. The cold start refuses AAREN, because a demonstration has no history of its own and
+zero planes would teach the network what a game without history looks like. The asynchronous
+learner also refuses it, because AAREN's supervised training shares the network. The plan was to
+make the Rainbow learner work first and change one thing at a time.
+
+\paragraph{Measurement.} The heuristic played 225 games as Player 1, alternately against the random
+opponent and the heuristic. A history aggregator tracked Player 2's moves and labelled them at
+battles exactly as the trainer does.
+\begin{itemize}
+  \item \emph{The ``has moved'' bit.} Of Player 1's attacks on a piece that had never moved,
+        41\% (1472 attacks, against random) and 49\% (1028, against the heuristic) hit a Bomb
+        or the Flag. Of its attacks on a piece that had moved, none did (2503 and 1712 attacks).
+        The observation does not contain this bit, and the game state does not record which
+        pieces have moved.
+  \item \emph{Piece type from the history.} AAREN labels only pieces that moved at least twice.
+        Its 6216 labelled reveals were split by game, 80\% for training and 20\% for testing,
+        and a fresh AAREN was trained for 4000 batches. On the 1272 test reveals it named the
+        type correctly in 35.6\% of cases. Always naming the most common type (Lieutenant) gave
+        16.3\%, and ``a long move means a Scout, otherwise the most common type'' gave 23.9\%.
+        Its accuracy was the same against the random opponent (34.9\%) as against the
+        heuristic (36.0\%). Since the random opponent moves without regard to rank, most of
+        what AAREN reads must be where a piece stood in the heuristic setup, rather than how it
+        behaves. A setup prior is real information against this opponent pool, but it would
+        shrink against varied setups.
+\end{itemize}
+
+\paragraph{Reading.} AAREN does carry information the observation lacks: it beats both simple rules
+on held-out games. The largest single piece of history information, however, is whether a hidden
+piece has moved at all. That bit separates a 45\% chance of attacking a Bomb or the Flag from
+none, and it needs one observation plane rather than a 64-plane embedding. The thesis accuracy
+of 24.23\% is close to the long-move rule here. Whether AAREN helps the \emph{agent} is a separate
+question that only paired runs can answer, with and without it, on the same evaluations.
+
+\paragraph{Change.} Made for formal\_6 (Section~\ref{sec:formal6}); at the time of this entry, none. Proposed order: add a ``has moved'' plane for enemy pieces (and mark
+a Scout revealed by a long move), then compare AAREN on and off. The cold start and the
+asynchronous learner would have to support AAREN for that comparison.
+
+\paragraph{Lesson.} Before adding a learned module to supply missing information, find out what the
+information is and how much of it a hand-made feature already captures. Here one bit carried most
+of it, and a module trained on revealed pieces never sees the unmoved ones that bit is about.
+
+% ------------------------------------------------------------------------------------------
+\section{Moved-piece planes and three learner fixes (formal\_6)}
+\label{sec:formal6}
+
+\paragraph{Change.} Four changes, made together before formal\_6:
+\begin{itemize}
+  \item \emph{Two observation planes, 32 in all.} The environment now records, for every square,
+        whether the piece on it has moved and whether it has ever moved more than one square at
+        once, which only a Scout can do. Both facts are public: the opponent sees every move. The
+        flags travel with the piece, including when it wins a battle, and are cleared when it is
+        taken. Plane 30 marks the enemy pieces of unknown rank that have moved, so they are not a
+        Bomb or the Flag. Plane 31 marks those that have made a long move, so they are Scouts.
+        The GUI bot and the browser player build the same planes, and tests replay games in both
+        and compare them plane by plane with the training environment.
+  \item \emph{Replay priorities from the KL divergence.} A transition's priority is now
+        $(\mathrm{KL}(m \,\|\, p) + 10^{-6})^{0.6}$, with
+        $\mathrm{KL} = \mathrm{CE} - H(m)$, as in Rainbow \cite{RainbowJMLR2021}, instead of the
+        cross-entropy. The loss itself is unchanged.
+  \item \emph{The battle boost on the battle move.} The 2.5-fold priority of a battle now goes to
+        the 5-step transition whose \emph{first} move was the attack. The mirrored copy of a
+        transition now gets the same boosts as the original, for battles and for wins.
+  \item \emph{No dropout in the target.} The target network is put in evaluation mode whenever
+        it is copied, so its targets carry no dropout. Its NoisyNet noise stays on, as in
+        Rainbow.
+\end{itemize}
+Everything else is formal\_5's configuration: material-only potential, cold start, asynchronous
+learner, 16 lanes, 20\,000 episodes. The first convolution now reads 32 planes, so checkpoints of
+formal\_4 and formal\_5 do not fit the new network; formal\_6 starts from zero like them.
+
+\paragraph{Why.} The three preceding sections. The ``has moved'' bit separated a 41 to 49\% chance
+that an attacked hidden piece was a Bomb or the Flag from none, and the observation did not contain
+it. Under the cross-entropy priority the terminal transitions, the only ones whose target is the
+game result, were sampled no more often than under uniform replay; under the KL divergence they
+would hold about 16 times their share of the priority. The battle boost of the thesis code
+landed four moves before the attack, and dropout moved the target value of the greedy move by
+more than the NoisyNet noise did.
+
+\paragraph{Result, cold start.} The cold start ran as before: the heuristic
+won 50, lost 27 and drew 23 of its 100 demonstration games (39\,406 transitions), and 5000
+pre-training updates took the loss from 4.13 to 3.95 and the margin loss to 0.076. The checks
+set for formal\_6 were: whether attacks on
+unmoved hidden pieces, and so losses to Bombs, become rarer than in formal\_4 and formal\_5;
+whether the Q-value one move before the end of a game moves towards the outcome (formal\_4's
+network put almost no mass there, a KL of 3.64); the spread of the priorities in the replay
+memory, which should now be wide rather than flat; and whether the network finally reads the
+rank of a revealed piece (the rank-swap test and the share of attacks on revealed pieces it
+loses, 59 to 63\% for formal\_4 and formal\_5 against 0\% for the heuristic).
+
+\paragraph{Result, to episode 9000.} The greedy evaluations of stage~1 (episodes 500 to 5000, 40
+games each) won 17, 18, 10, 18, 11, 23, 14, 18, 15 and 13 games against the random opponent and
+6, 5, 6, 13, 2, 7, 11, 8, 4 and 5 against the heuristic: no trend, and no better than formal\_4
+or formal\_5. No gate was passed. At episode 5000 the stage's episode cap moved the opponent
+schedule to stage~2, whose training opponents are the frozen and the smart heuristic only; the
+random opponent and the plain heuristic drop out. The evaluations against the heuristic then won
+7, 6, 7, 1, 5, 4, 1 and 7 of 40 (episodes 5500 to 9000). In the training games of stage~2 the
+agent won about 17\% against the frozen heuristic and drew about 80\% against the smart one, and
+games grew from about 350 to 550 moves, most of them ending in no-battle draws.
+
+The probes of the previous runs were repeated on the networks of episodes 5000 and 9000, in 30
+greedy games against the random opponent (and 300 positions for the rank-swap test):
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & ep.\ 5000 & ep.\ 9000 & heuristic \\
+\midrule
+games won / lost / drawn                      & 11 / 15 / 4 & 0 / 3 / 27 & 23 / 4 / 3 \\
+attacks per game                              & 34          & 9          & 39 \\
+attacks on revealed pieces lost               & 66\%        & 73\%       & 0\% \\
+rank-swap: Scout $-$ Marshal, positive in     & 48\%        & 33\%       & -- \\
+share of attacks on unmoved hidden pieces     & 27\%        & 0\%        & 31\% \\
+\quad of which Bomb or Flag                   & 44\%        & --         & 40\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+formal\_5's network (episode 2750, 30 planes) put 30\% of its attacks on unmoved hidden pieces,
+37\% of them Bombs or the Flag. So by episode 5000 the moved-piece planes had not changed whom the
+agent attacks, and it still did not read the revealed rank (the Scout and Marshal versions of an
+attack differed by $-0.001$ on average). By episode 9000 it no longer attacked unmoved pieces at
+all, but it attacked hardly anything: it drew 27 of 30 games against the random opponent, which
+formal\_6 had beaten 11 times at episode 5000. Its value of an attack was about $-0.45$ whatever the
+target, close to the $-0.5$ of a draw.
+
+The C51 loss reported by the trainer fell from 2.47 (first 500 episodes) to 0.38 (last 500), far
+below the 3.0 to 3.7 of formal\_4 and formal\_5. The reported loss is the cross-entropy weighted by
+the importance-sampling weights of the prioritized replay, and those weights change with the
+priorities, so the number is not comparable across the change of priority and shows nothing about
+play on its own.
+
+\paragraph{Reading.} Two separate things. In stage~1, the moved-piece planes and the learner fixes
+changed nothing that the probes measure: the network still does not learn the outcome of a battle
+from what it can see, the failure of formal\_4 and formal\_5. In stage~2, a change of opponents
+alone, with the environment unchanged, turned an agent that beat the random opponent about a third
+of the time into one that only draws: the agent trained against a pool in which it mostly draws
+(the smart heuristic) or loses (the frozen one), its values moved to the value of a draw, and it
+stopped attacking. This is the forgetting that the removal of the curriculum's environment changes
+was meant to avoid, caused here by the opponent schedule that was kept.
+
+\paragraph{Lesson.} An episode cap that moves an agent to the next stage of an opponent schedule
+when it has not passed the gate turns the schedule into a fixed timetable, and dropping the weak
+opponents from the pool removes the games the agent can win; with only draws and losses left, a
+value learner learns that nothing it does matters and plays for the draw. Keep the earlier
+opponents in the pool, and evaluate against them throughout, so that forgetting shows up when it
+starts. (formal\_7 kept them, and the collapse happened anyway, so dropping them was not the cause:
+Section~\ref{sec:formal7}.)
+
+\paragraph{Lesson.} When a run is stopped to fix several faults at once, the next run cannot say
+which fix mattered; it can only say whether they did together. Here that trade was accepted
+because each fix restores the standard algorithm rather than adding something new, and the
+paired comparison that matters more (AAREN on and off) still has to be run with one difference.
+
+% ------------------------------------------------------------------------------------------
+\section{Why the network does not learn the rank of a revealed piece}
+\label{sec:revealed-signal}
+
+\paragraph{Observation.} In every formal run the agent lost most of its attacks on enemy pieces
+whose rank it could see (59 to 73\%), and its value of an attack did not depend on that rank
+(Section~\ref{sec:formal6}). Three explanations were possible: the information does not reach
+the training targets, the network cannot represent the rule, or the training signal is too weak
+for the learner to pick up. Three probes on formal\_6's network of episode 5000 separate them.
+
+\paragraph{Measurement 1: the targets.} The network played 32 greedy games (6 won, 22 lost, 4
+drawn) through the trainer's pipeline, which stored 11\,426 transitions. Each one was classed by
+its first move; an attack on a revealed piece was classed won, tied or lost by the battle rule.
+For the non-terminal ones:
+\begin{center}
+\small
+\begin{tabular}{lrrccc}
+\toprule
+First move & count & share & 5-step reward & $\mathbb{E}[m]$ & network $Q$ \\
+\midrule
+quiet move                   & 9524 & 83.4\% & $-0.016$ & $-0.110$ & $-0.108$ \\
+attack on a hidden piece     & 1304 & 11.4\% & $-0.002$ & $-0.035$ & $-0.017$ \\
+attack on a revealed piece, won  & 146 & 1.3\% & $+0.023$ & $-0.040$ & $-0.079$ \\
+attack on a revealed piece, lost & 388 & 3.4\% & $-0.027$ & $-0.104$ & $-0.074$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The targets do carry the outcome of the exchange: their means differ by 0.064 between won and
+lost attacks. The network's $Q$ differs by $-0.005$. The agent also chose attacks on revealed pieces
+that it lost 2.7 times as often as ones it won. Each target distribution $m$ is wide, with a standard
+deviation of 0.77 for these transitions, because it carries the uncertainty of an outcome hundreds
+of moves away. The target \emph{means} of one class varied much less across transitions (0.13).
+
+\paragraph{Measurement 2: capacity.} A fresh network of the same size was trained on 3267
+positions from these games. In each, one attack on an adjacent enemy piece was chosen, and the
+target square was edited to a revealed piece of random rank. The C51 target was a function of
+the battle outcome $o \in \{1, 0, -1\}$ of that attack alone. Every batch of 128 consisted of such
+attacks. The measure is the gap between the network's values of the attack when the target is
+shown as a Scout (a win) and as a Marshal (a loss), over 300 held-out positions:
+\begin{center}
+\small
+\begin{tabular}{p{7.2cm}lcc}
+\toprule
+Target & l.r. & Scout $>$ Marshal & gap (ideal) \\
+\midrule
+$0.5\,o$, no noise & $3\cdot 10^{-5}$ & 100\% & 0.44 (1.00) \\
+$0.5\,o$, no noise & $10^{-3}$ & 100\% & 0.97 (1.00) \\
+$0.07\,o$ plus sampled noise of s.d.\ 0.77 & $3\cdot 10^{-5}$ & 68\% & 0.003 (0.14) \\
+\quad the same with signal $0.35\,o$ & $3\cdot 10^{-5}$ & 94\% & 0.023 (0.70) \\
+\quad the same with 12 ``attack wins / ties / loses'' planes & $3\cdot 10^{-5}$ & 72\% & 0.005 (0.14) \\
+distributions of s.d.\ 0.77, mean $0.07\,o$ plus noise of s.d.\ 0.13 & $3\cdot 10^{-5}$ & 99\% & 0.028 (0.14) \\
+\quad the same plus a squared error on the mean & $3\cdot 10^{-5}$ & 99\% & 0.052 (0.14) \\
+\bottomrule
+\end{tabular}
+\end{center}
+(After 2000 batches. ``Scout $>$ Marshal'' is the share of held-out positions in which the attack
+is valued higher with the target shown as a Scout.) With a clean target the network learnt the
+rule within 1000 batches, even at the run's learning
+rate, so it can read a revealed rank and compare it with the attacker's. Planes that state the
+outcome of every possible attack outright hardly helped, so finding the relation is not the
+difficulty either. What decides is the size of the signal relative to the width of the target. The
+win--loss difference of the material potential is under one atom of the support (0.08 of $\pm 2$
+over 51 atoms) and a twelfth of the target's width. Under the cross-entropy, a shift of the mean
+that small changes the loss by little, so it is learnt slowly. With targets shaped like the real
+ones, 2000 batches of nothing but these attacks learnt a fifth of the gap. Adding a squared error
+between the predicted and target means doubled that.
+
+\paragraph{Reading.} The rank information reaches the network, and the network can use it. The
+training signal for using it is small and diluted. Attacks on revealed pieces were 5\% of the stored
+transitions, so the real learner sees about 6 in a batch of 128. Those 6 compete with everything
+else the network fits, against a target network that changes every 1000 updates. The probes show
+the signal is learnable when concentrated. That dilution and the moving targets account for the
+rest is an inference, not a measurement. This is also why the earlier fixes did not change the
+behaviour. The material-only potential made the signal clean, but no larger than a fraction of an
+atom. The moved-piece planes and the priority fixes do not touch it. Nor would AAREN: it supplies
+information about hidden pieces, while this failure concerns pieces that are already revealed.
+
+\paragraph{Change.} The first and third were made for formal\_7 (Section~\ref{sec:formal7}). The
+options the probes support were, by cost: an expected-value loss beside the C51 loss (it doubled
+the learnt gap); a larger weight on the material potential with a wider value support (a five-fold
+signal got the ordering right in 94\% of positions); and a priority boost for attacks on revealed
+pieces, which raises their share of the batch.
+
+\paragraph{Lesson.} A distributional critic learns differences in the mean slowly when they are
+small next to the width of the return distribution, even when they are exact. Before relying on
+a reward term to teach a decision, compare that term's difference between the right and the wrong
+choice with the spread of the targets. Then check, on a fresh network trained on that decision
+alone, how much of the difference it learns in a realistic number of updates.
+
+% ------------------------------------------------------------------------------------------
+\section{A mean loss, revealed attacks in the batch, and the opponent pool (formal\_7)}
+\label{sec:formal7}
+
+\paragraph{Change.} formal\_6 ended at episode 11\,680, when its process was killed from outside
+(its log shows no error; it was started from the desktop app's shell, and formal\_7 is started
+detached from it). Its evaluations against the heuristic from episode 9500 on were 5, 6, 8, 5 and
+5 wins of 40, with no gate passed. formal\_7
+starts from zero with formal\_6's configuration and three changes:
+\begin{itemize}
+  \item \emph{A loss on the mean.} The squared error between the means of the predicted and the
+        target distribution, $\bigl(\sum_i p_i z_i - \sum_i m_i z_i\bigr)^2$ with weight 1, is
+        added to each transition's C51 cross-entropy. Both are weighted by the importance-sampling
+        weight. The priorities are still the KL divergence. The loss reported by the trainer now
+        includes this term, so it is not comparable with that of earlier runs.
+  \item \emph{Attacks on revealed pieces in the batch.} A transition whose first move attacks an
+        enemy piece of known rank, and its mirror image, keeps four times its priority through
+        every priority update. The importance-sampling weights leave this factor uncorrected, so
+        these transitions count four times as much in the loss, not just four times as often.
+        At about 5\% of the replay, they become about 17\% of each batch.
+  \item \emph{The opponent pool after stage 1.} Stages 2 and 3 keep the random opponent and the
+        heuristic in their pools beside the frozen and smart heuristics (or the self-play
+        snapshot). The usual weighting (more games against the opponents it beats less often)
+        still gives the random opponent at least 15\%. Every evaluation now also plays the random
+        opponent, so forgetting shows as soon as it starts. Stage 1 and the episode caps are
+        unchanged.
+\end{itemize}
+
+\paragraph{Why.} Section~\ref{sec:revealed-signal}. The win--loss difference of an exchange is
+present in the targets but is a twelfth of their width, so the cross-entropy learns it slowly.
+A mean loss doubled the learned gap in the probe. The attacks that carry the difference were 5\%
+of each batch. Section~\ref{sec:formal6}: once the stage-1 cap moved formal\_6 to a pool it could
+only draw or lose against, it stopped attacking.
+
+\paragraph{Result, to episode 2500.} The cold start ran as in formal\_6 (the heuristic won 53,
+lost 27 and drew 20 of the 100 games; 5000 pre-training updates, loss 4.17 to 3.94 with the mean
+term, margin loss 0.074). Wins in the 40-game evaluations, with formal\_6 at the same episodes in
+brackets:
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+Episode & 500 & 1000 & 1500 & 2000 & 2500 \\
+\midrule
+random    & 16 (17) & 13 (18) & 12 (10) & 23 (18) & 17 (11) \\
+heuristic & 4 (6)   & 4 (5)   & 10 (6)  & 7 (13)  & 7 (2) \\
+\bottomrule
+\end{tabular}
+\end{center}
+Summed over the five evaluations, formal\_7 won 81 games against the random opponent to formal\_6's
+74, and 32 against the heuristic to 32. One evaluation of 40 games has a standard error of about
+3 wins at these rates, so stage 1 shows no difference yet. That is expected: two of the three
+changes act on stage 2 and later, and the mean loss acts on a signal the evaluations measure only
+indirectly. The test is still the rank-swap probe and the share of revealed attacks lost, and,
+after episode 5000, whether the evaluations against the random opponent hold up.
+
+\paragraph{Result, the revealed-rank probe at episodes 2500 and 3500.} Each checkpoint of both
+runs played 32 greedy games (same seed). The attacks on revealed pieces in them were classed by
+the battle rule, and the rank swap of Section~\ref{sec:revealed-signal} was run on one fixed set
+of 300 positions for all four checkpoints:
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & formal\_6, 2500 & formal\_7, 2500 & formal\_6, 3500 & formal\_7, 3500 \\
+\midrule
+attacks on revealed pieces & 478 & 484 & 512 & 470 \\
+\quad won / tied / lost & 26 / 10 / 64\% & 32 / 6 / 62\% & 30 / 9 / 62\% & 29 / 8 / 63\% \\
+Scout $>$ Marshal & 65\% & 64\% & 66\% & 67\% \\
+mean gap & 0.021 & 0.020 & 0.032 & 0.022 \\
+$\mathbb{E}[m]$ gap, won $-$ lost & 0.088 & 0.111 & 0.101 & 0.115 \\
+\bottomrule
+\end{tabular}
+\end{center}
+By episode 3500 (about 650\,000 updates) the two runs do not differ. Both still lose about
+two-thirds of the attacks they choose on pieces whose rank they can see, and both rank the Scout
+above the Marshal in two-thirds of the positions, with a gap of a fifth of the target's 0.1. The
+targets carry the difference as before. So the mean loss and the four-fold priority have not yet
+made the network learn it faster in the real run. The probe had predicted twice the learning
+speed on a batch made only of these attacks. In the run they are about a sixth of the batch,
+and the targets move. The value of every attack was also lower in formal\_7 at episode 3500
+($-0.22$ to $-0.26$, against $-0.05$ to $-0.12$ in formal\_6). That checkpoint comes after the
+resume, which emptied the replay of its own games, so the cause is not clear.
+
+\paragraph{Result, to episode 5500: stage 2 collapses as before.} Stage 1 ended at its cap of
+5000 episodes. Its last evaluations were 15, 18 and 17 wins of 40 against the random opponent
+and 7, 6 and 6 against the heuristic (episodes 4000 to 5000), as in formal\_6. 500 episodes into
+stage 2, the greedy agent drew 37 of 40 games against the random opponent, won none and lost 3.
+It won 7 of 40 against the heuristic. Episodes slowed from about 1.9 to 6.9 seconds, as the
+games ran on to the draw rules. The random opponent was in the stage-2 pool: it got 112 of the
+500 training games. The agent won the first of them about half the time and then stopped winning
+against it. So keeping the opponents it can beat in the pool did not prevent the collapse;
+Section~\ref{sec:formal6}'s explanation, that the agent forgot them, is wrong.
+
+Only the opponents change at the stage switch: the game, its limits and the shaping stay the
+same. A reading that fits the numbers is that stage 2 made avoiding battle the better policy. Against
+the frozen and smart heuristics, three-quarters of the stage-2 pool, the agent won about 15\% and
+lost about 70\% of its training games. A game it fought out was then worth about
+$0.15 - 0.70 = -0.55$, no more than a draw ($-0.5$). An exchange it lost also cost material
+shaping at once, while avoiding battle cost nothing until the game ended. The observation does
+not say which opponent the agent is playing, so the same passive policy was played against the
+random opponent. The underlying weakness is the one measured above: it loses two-thirds of the
+attacks it chooses on pieces whose rank it can see. Until that changes, fighting does not pay
+against a competent opponent.
+
+\paragraph{Lesson.} When a curriculum moves the agent to opponents it mostly loses to, check the
+value of a draw against the value of playing on. If the draw is worth as much, the agent will learn
+to draw, and it will do so against every opponent it cannot tell apart from them.
+
+The process was killed at about episode 3000 by a console window-close event
+(Section~\ref{sec:engineering}). It was resumed from the checkpoint of episode 2750 with the
+networks, the target network, the optimiser and the curriculum state, but not the replay
+buffer. On resuming, the trainer played 100 new heuristic games (48 won, 24 lost, 28 drawn;
+36\,214 demonstration transitions) to refill it, and skipped the pre-training updates. Its own
+transitions of episodes 1 to 2750 are gone, so for a while after the resume the replay holds a
+larger share of demonstrations than it did before. Results after episode 2750 are of a resumed
+run.
+
+\paragraph{Lesson.} When a probe shows that a learner cannot pick up a small but exact signal, the
+fix should act on that signal, not on the agent's inputs. Two levers do: the loss, so the signal
+weighs more against the noise it competes with, and the data, so the cases that carry it are a
+larger share of each batch.
+
+% ------------------------------------------------------------------------------------------
+\section{What the agent has to learn, and in what order}
+\label{sec:skill-ladder}
+
+\paragraph{Observation.} Read together, the formal runs show the agent stuck at one step of a
+sequence of skills that Stratego asks for. Each skill pays off only through the one before it,
+and the opponent schedule had assumed skills the agent did not have.
+\begin{enumerate}
+  \item \emph{The rules.} Which moves are legal. The action mask supplies this; nothing has
+        to be learned.
+  \item \emph{Engagement.} Moving pieces forward and making contact, instead of shuffling until
+        a draw rule ends the game. Learned in every run since the draw was given a cost: in stage 1
+        the agent attacks, and it wins 30 to 58\% of its evaluation games against the random
+        opponent, about 40\% on average.
+  \item \emph{Comparing two known ranks.} Attacking a revealed piece it beats and leaving or
+        fleeing one that beats it. This is the whole game under full information, and it needs
+        no inference. It is \emph{not} learned: from formal\_4 to formal\_7 the agent lost 59 to
+        73\% of the attacks it chose on revealed pieces, and its values barely depend on the rank it
+        sees (Sections~\ref{sec:revealed-signal} and~\ref{sec:formal7}). An agent with this skill
+        should beat a random opponent nearly every time, because the random opponent offers its
+        pieces at random. Winning 40\% of those games is itself a sign that the skill is missing.
+  \item \emph{Inference about hidden pieces.} A piece that has moved is neither Bomb nor Flag. A
+        piece that moved more than one square is a Scout. A low piece can be sent to make a
+        strong one reveal itself. formal\_6 gave the network these facts as planes 30 and 31.
+        This skill pays off only through skill~3: knowing more about a piece is worth something
+        only to an agent that attacks the right pieces once it knows.
+  \item \emph{Managing information.} Keeping its own strong pieces hidden, protecting revealed
+        ones, and the Spy against the Marshal. It pays off by denying the opponent skills 3
+        and 4.
+  \item \emph{Strategy.} Finding and defending the Flag, tempo, the setup and the endgame. Only
+        the outcome rewards it.
+\end{enumerate}
+
+\paragraph{Reading.} The reward signal for each skill weakens down the list. The material
+potential rewards skill~3 at once, as each exchange is won or lost. Skill~4 gets no immediate
+reward; it is paid later, through better exchanges. Skill~6 is paid only by the outcome, hundreds
+of moves later. This is why skill~3 is the bottleneck. It has the most direct signal of the skills
+that have to be learned, and everything above it is built on it. (Why that signal is not learned
+is still open. It is not only its size: formal\_8 made it two and a half times larger in the
+targets, and the network still did not respond to the rank; Section~\ref{sec:formal8}.)
+
+The opponent schedule assumed the skills in a different order. Stage 2's frozen and smart
+heuristics play skills 3 to 5 well, so playing them presumes the agent can already compare ranks.
+The stage-1 gates measured win rates against random and the heuristic, which mix every skill
+together. And the episode cap moved the agent on whether or not it had passed them. An agent
+without skill~3 that meets opponents with it loses most exchanges. It can then do no better than
+draw, which is what formal\_6 and formal\_7 learned to do.
+
+\paragraph{Lesson.} Name the skills a game requires, the order in which their rewards depend on
+each other, and a direct measure of each. Then advance a curriculum on the measure of the skill the
+next stage needs, not on a win rate that mixes them all. The direct measure of skill~3 is the
+share of attacks on revealed pieces that the agent loses in its own games. The evaluations report
+it from formal\_8 on.
+
+% ------------------------------------------------------------------------------------------
+\section{A five-fold material signal and stages without a cap (formal\_8)}
+\label{sec:formal8}
+
+\paragraph{Change.} formal\_7 was stopped at episode 5690, in stage 2. formal\_8 starts from zero
+with formal\_7's configuration (mean loss, priority boost on attacks on revealed pieces, earlier
+opponents kept in the pool) and three changes:
+\begin{itemize}
+  \item \emph{The material potential is five times larger} (weight 5 instead of 1). The support of
+        the value distribution is widened from $\pm 2$ to $\pm 6$ (0.24 per atom) so that it still
+        covers every return (outcome plus $-\Phi(s_0)$ with $\Phi \in [-5, 5]$). A won exchange
+        of average size now moves the target by about 0.3, more than an atom, against the same
+        outcome noise as before.
+  \item \emph{No episode cap on any stage.} A stage ends only when its evaluation gates are
+        passed (stage 1: 70\% against the random opponent and 50\% against the heuristic).
+  \item \emph{A direct measure of skill~3 in the evaluations.} Every evaluation game counts the
+        agent's attacks on revealed pieces and how many it won or lost by the battle rule; the log
+        shows the share lost beside each opponent's result.
+\end{itemize}
+
+\paragraph{Why.} Section~\ref{sec:skill-ladder}. The capacity probe of
+Section~\ref{sec:revealed-signal} put the rank-swap ordering right in 94\% of positions when the
+signal was five times larger, against 68\% at the run's size. Stage 1 is the only stage in which
+no run has collapsed, so the agent stays there until it has the skill the next stage requires.
+
+\paragraph{Caveat.} The shaping is potential-based, so it leaves the optimal policy unchanged
+\cite{NgPBRS}. The optimal shaped values are the unshaped ones minus $\Phi(s)$, a term that
+depends only on the state, so in the limit the gap between two actions is the same at any weight.
+A larger potential makes the exchange visible in the early targets, before the bootstrapped values
+have learned $-\Phi$. It speeds up learning and does not change what is learned. This is the
+intended effect: the probes showed the agent learning skill~3 too slowly, not learning the wrong
+thing.
+
+\paragraph{Result.} The cold start ran as before (the heuristic won 51, lost 23 and drew 26 of
+the 100 games; 5000 pre-training updates, loss 4.40 to 4.00, margin loss 0.084). The run was
+stopped at episode 2386. Its evaluations, with formal\_7 at the same episodes in brackets:
+\begin{center}
+\small
+\begin{tabular}{lccccc}
+\toprule
+Episode & 500 & 1000 & 1500 & 2000 & sum \\
+\midrule
+wins against random    & 10 (16) & 11 (13) & 18 (12) & 18 (23) & 57 (64) \\
+wins against heuristic & 4 (4)   & 12 (4)  & 5 (10)  & 5 (7)   & 26 (25) \\
+revealed attacks lost, against random    & 63\% & 69\% & 62\% & 60\% & \\
+revealed attacks lost, against heuristic & 77\% & 72\% & 72\% & 78\% & \\
+\bottomrule
+\end{tabular}
+\end{center}
+The wins do not differ from formal\_7's. The new measure of skill~3 does not improve over the
+run. In each 40-game evaluation the agent attacked 450 to 510 revealed pieces against the random
+opponent and 160 to 180 against the heuristic, and it lost 60 to 78\% of those attacks.
+
+The probe of Section~\ref{sec:formal7} on the checkpoint of episode 2000 separates the target from
+what the network learned. The won--lost gap of the target means was 0.25 (about 0.1 in formal\_7):
+the five-fold potential did make the signal in the targets two and a half times larger. The
+network's $Q$ gap between won and lost attacks was 0.06. In the rank swap the network valued
+the attack higher on a revealed Scout than on a revealed Marshal in 53\% of the 300 positions,
+with a mean gap of 0.003. That is no better than chance, and below formal\_7's 66\% at the same
+episode. (The probe ran with formal\_8's support and potential. Only the 66\% is comparable for the
+formal\_7 checkpoint; its values are on the wrong scale.)
+
+So the size of the signal relative to the target's width was not what kept the network from
+learning skill~3. Section~\ref{sec:revealed-signal} explained the failure that way, from a fresh
+network trained on batches made only of these attacks; that network learned the rule. In the
+run, a signal two and a half times larger left the network's response to the rank at chance.
+Something that differs between the probe and the run stops it: the mix of the batch, the moving
+bootstrapped targets, the NoisyNet head, or the rest of the training pipeline. Which one is the
+next question. A direct test is to train the probe's fresh network on batches drawn from the
+run's own replay buffer, adding one difference at a time, and watch the rank swap.
+
+\paragraph{Lesson.} A probe that isolates one factor can show that the factor is \emph{sufficient}
+to explain a failure, not that it is the explanation. The capacity probe showed a small signal
+learnt slowly; the run with a larger signal learnt nothing more. Before scaling a fix up to a full
+run, reproduce the failure inside the probe by adding back the run's conditions one at a time,
+until the probe fails as the run does.
+
+% ------------------------------------------------------------------------------------------
+\section{Engineering notes}
+\label{sec:engineering}
+
+\begin{itemize}
+  \item formal\_6 and formal\_7 were both killed partway, with no Python error. formal\_7's error
+        log showed \texttt{forrtl: error (200): program aborting due to window-CLOSE event} once
+        for each process. The Intel Fortran runtime that numpy's maths library loads installs a
+        console handler that aborts the process when its console window closes. Starting the run
+        detached from the app's shell was not enough, because the launcher still gave it a
+        console. Runs are now started with \texttt{pythonw.exe}, which has no console, with the
+        output sent to log files and \texttt{FOR\_DISABLE\_CONSOLE\_CTRL\_HANDLER=1} set. A
+        long run should not own a console window that something else can close.
+  \item An \texttt{import time} statement inside the training loop made \texttt{time} a local
+        name for the whole training function, so any use of \texttt{time} before that line
+        failed. Modules should be imported once, at the top of the file.
+  \item A checkpoint loader that silently falls back to a fresh network turns a missing file into
+        a misleading result: a probe of a checkpoint that did not exist yet reported the values of
+        an untrained network. Diagnostic scripts now assert that the file exists.
+  \item Most source files have Windows line endings. An edit script that matches multi-line text
+        must normalise them first, or it silently matches nothing; a patch helper that asserts the
+        number of matches made every such miss fail loudly instead.
+  \item The first run of the capacity probe above passed an all-zero next-state distribution to
+        the C51 projection for its terminal targets. The projection moves probability mass, so
+        the targets were empty, the loss was zero, and no network learnt anything. Every
+        configuration then gave the same numbers to three digits, which exposed it. A probe
+        should assert that its targets are distributions (they sum to one) before trusting a
+        negative result.
+  \item A patch helper made tolerant of trailing whitespace also treated the end of a replaced
+        block as optional whitespace, and so ate the indentation of the line that followed. Four
+        source files no longer compiled. Compiling every edited file at once, before running any
+        test, found all of them in one pass.
+\end{itemize}

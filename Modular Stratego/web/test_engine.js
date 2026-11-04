@@ -20,7 +20,8 @@ const fail = (msg) => { console.error(msg); process.exit(1); };
 
 function digest(obs) {
   const nz = [];
-  for (let i = 0; i < 28 * 100; i++) if (obs[i] !== 0) nz.push(i);
+  // every plane but the counters 28-29 (compared as values below)
+  for (let i = 0; i < E.OBS_PLANES * 100; i++) if (obs[i] !== 0 && (i < 28 * 100 || i >= 30 * 100)) nz.push(i);
   return { nz, noBattle: obs[28 * 100], progress: obs[29 * 100] };
 }
 

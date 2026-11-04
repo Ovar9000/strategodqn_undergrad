@@ -15,7 +15,7 @@ from environment import StrategoEnvironment
 from environment.board import HIDDEN_PIECE, LAKE_SQUARE
 from environment.piece import PieceType
 
-OBS_PLANES = 30
+OBS_PLANES = 32
 NUM_ACTIONS = 3600
 ENEMY_MOVE = ((6, 0), (5, 0))  # treated as an opponent move by the aggregator
 LAKES = [(4, 2), (4, 3), (5, 2), (5, 3), (4, 6), (4, 7), (5, 6), (5, 7)]
@@ -271,12 +271,12 @@ def test_next_state_is_stored_with_the_history_it_will_be_acted_on_with(cpu, aar
     assert exp.history_snapshot[:, 4, 1].abs().sum() == 0
 
     seen = {}
-    real = agent.q_network.forward
+    real = agent.q_network.forward_logits  # both online passes go through it (forward() calls it)
 
     def spy(x):
         seen.setdefault('inputs', []).append(x.detach().clone())
         return real(x)
-    agent.q_network.forward = spy
+    agent.q_network.forward_logits = spy
     agent.amp_enabled = False
     agent.replay(batch_size=1)
     next_input = seen['inputs'][1]  # online pass on the next states

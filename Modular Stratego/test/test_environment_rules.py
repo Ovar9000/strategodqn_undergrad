@@ -102,7 +102,7 @@ def test_no_battle_rule_can_be_turned_off(cpu):
 
 def test_training_and_eval_limits(cpu):
     from settings.training_config import NO_BATTLE_DRAW_PLIES, EVAL_NO_BATTLE_DRAW_PLIES
-    assert (NO_BATTLE_DRAW_PLIES, EVAL_NO_BATTLE_DRAW_PLIES) == (100, 200)
+    assert NO_BATTLE_DRAW_PLIES == EVAL_NO_BATTLE_DRAW_PLIES == 200  # training is graded under its own rule
     assert StrategoEnvironment(cpu).no_battle_draw_plies == NO_BATTLE_DRAW_PLIES
     assert StrategoEnvironment(cpu, no_battle_draw_plies=EVAL_NO_BATTLE_DRAW_PLIES).no_battle_draw_plies == 200
 
