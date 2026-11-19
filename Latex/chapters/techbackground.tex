@@ -20,20 +20,20 @@ Each army consists of 12 different types of pieces, with ranks ranging from 1 (t
     \label{fig:stratego_tech}
 \end{figure}
 
-The high theoretical state space of Stratego shows how difficult the game is to solve:
+The number of ways to start a game of Stratego already shows how difficult the game is to solve. Each player arranges 40 pieces of 12 types (one Flag, Spy, Marshal and General, 2 Colonels, 3 Majors, 4 Captains, 4 Lieutenants, 4 Sergeants, 5 Miners, 8 Scouts and 6 Bombs) on 40 squares:
 
 \begin{equation}
-|\mathcal{S}| = \binom{40}{1,1,2,3,4,4,4,5,8} \times 10^{10} \times 2^{40} \approx 10^{535}
+\frac{40!}{1!\,1!\,1!\,1!\,2!\,3!\,4!\,4!\,4!\,5!\,8!\,6!} \approx 1.4 \times 10^{33}
 \end{equation}
 
-Perolat et al. \cite{perolat2022stratego} established the permutation for game state. The agent must use reasoning with limited information rather than trying to look at every possible outcome, making the computation intractable.
+The two players' setups together give about $10^{66}$ starting positions, and Perolat et al. \cite{perolat2022stratego} put the size of the game tree at about $10^{535}$ nodes. The agent must reason with limited information rather than try to look at every possible outcome, which is intractable.
 
 
 \section{MARQ Framework Overview}
 
 The MARQ framework is a Multi-Agent Rainbow Deep Q-Networks system that trains agents through self-play and deep reinforcement learning \cite{AlphaStratego}. Agents learn by competing against many different opponents, including their own previous versions and exploratory variants, within a league-based self-play system.
 
-The central problem is reasoning about hidden information without enumerating every possible state. The number of possible game states exceeds $10^{535}$, and initial setups reach $10^{66}$ per player \cite{perolat2022stratego}. MARQ handles this scale through implicit belief representations, probabilistic reasoning, and pattern recognition. Deep reinforcement learning estimates values while attention mechanisms process game history and mixed strategies prevent exploitation, all within real-time computational constraints.
+The central problem is reasoning about hidden information without enumerating every possible state. The game tree has about $10^{535}$ nodes, and the two players' initial setups give about $10^{66}$ starting positions \cite{perolat2022stratego}. MARQ handles this scale through implicit belief representations, probabilistic reasoning, and pattern recognition. Deep reinforcement learning estimates values while attention mechanisms process game history and mixed strategies prevent exploitation, all within real-time computational constraints.
 
 The architecture connects these components in a pipeline. The AAREN module takes raw game positions and move sequences and produces learned embeddings that encode opponent piece identity inferences. These embeddings are the input for all subsequent reasoning. A league-based training method trains and evaluates MARQ agents simultaneously.
 

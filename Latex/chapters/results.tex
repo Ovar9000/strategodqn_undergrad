@@ -104,7 +104,7 @@ The piece prediction accuracy hit 20\% after episode 5,000 and stagnated for the
 
 Draws reached 38.5\% of all games, and the win rate was only 22.2\%. This rate matters not just as a performance number but as a drag on learning itself, a symptom of a bigger problem.
 
-The scalar value collapse (Finding~2) made the model play safe rather than optimal. A scalar Q-value cannot represent multi-modal outcome distributions. A move with 40\% win probability and 60\% loss probability (expected value $\approx -0.2$) looks worse than a certain draw ($-0.3$) to a mean-based estimator. The draw-producing move gets the higher Q-value even though it is strategically inferior.
+The scalar value collapse (Finding~2) was first offered as the reason the model played safe rather than well. A scalar Q-value cannot represent a multi-modal outcome distribution, but that does not by itself favour the draw. A mean-based estimator ranks moves by their expected return. A move with a 40\% chance of winning and a 60\% chance of losing has an expected value of about $-0.2$, so it ranks below a certain draw only when the draw is worth more than $-0.2$; against a draw worth $-0.3$ it ranks above it. An estimator that had learned those means correctly would therefore choose the attack. The C51 agent also chooses by the mean of its distribution, so the distributional head would not change this ranking. The draws need another explanation. The later runs point to what a drawn game costs, and to how weakly the outcome of a game reaches the moves that led to it (Appendix~\ref{app:lessons}).
 
 \section{Architectural Comparison: Unified versus Dual-Model Pipeline}
 
@@ -191,7 +191,7 @@ No sequential compression, no information decay. The network can attend to any p
 
 The normal DQN relies on a hard-coded $\epsilon$-greedy exploration schedule that decays from 1.0 down to 0.01. Once it hits this floor, the schedule stops adapting. From that point on, the agent explores uniformly at a flat 1\% rate regardless of the game state or its confidence in the current Q-values.
 
-Stratego has over $10^{535}$ possible states \cite{perolat2022stratego}. A uniform random exploration rate of 1\% is a blunt mechanism that will almost never stumble on the complex sequences of moves required to discover optimal strategies. The agent becomes trapped in local optima because its exploration policy cannot recognize which parts of the state space require further investigation. This limitation necessitates a mechanism like Noisy Networks \cite{RainbowJMLR2021}, which replaces hard-coded randomness with learnable parameters that concentrate exploration where the value function is most uncertain.
+Stratego's game tree has about $10^{535}$ nodes \cite{perolat2022stratego}. A uniform random exploration rate of 1\% is a blunt mechanism that will almost never stumble on the complex sequences of moves required to discover optimal strategies. The agent becomes trapped in local optima because its exploration policy cannot recognize which parts of the state space require further investigation. This limitation necessitates a mechanism like Noisy Networks \cite{RainbowJMLR2021}, which replaces hard-coded randomness with learnable parameters that concentrate exploration where the value function is most uncertain.
 
 \subsection{Sparse Reward Propagation}
 

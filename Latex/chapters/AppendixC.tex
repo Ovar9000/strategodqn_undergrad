@@ -531,6 +531,41 @@ The validation table now reads ``Not tested'', ``Not supported'', ``Inconclusive
 or ``Self-play only'' instead of ``Validated'' for every row. The Methodology chapter now lists all six
 Rainbow components and separates the thesis configuration from that of the formal runs.
 
+The Introduction and the Conclusion were revised later, after formal\_14, because they still
+stated what the Results chapter had withdrawn. The Introduction said the changes ``doubled the win
+rate'' and ``resolved the scalar value collapse and exploration death'', and the Conclusion that
+the evidence supported an architectural cause of the baseline's ceiling. Both now report the
+self-play figures as a change in the draw rate, give the 11.66\% against heuristic opponents beside
+them, and say that the later runs found the agent's level set by its demonstrator. The Conclusion
+gained a section that answers the three research questions as far as the data allow (the second
+was not demonstrated; the third remains open, with AAREN off in every formal run). Four further
+statements were corrected in the same pass:
+\begin{itemize}
+  \item C51 was said to let the agent tell risky decisive moves from safe passive ones. The agent
+        acts on the mean of the distribution, so two moves with the same expected return remain
+        tied whatever the head learns.
+  \item The zero noise entropy of the normal DQN was read as confirming that its exploration had
+        been exhausted. That network had no noisy layers, so the zero is a property of the design.
+  \item The lower step count of the Rainbow run (5.17 against 10.31 million) was called sample
+        efficiency in the Limitations, against Section~\ref{finding:10}.
+  \item $10^{535}$ was given in the Introduction, the Results and the technical background as the
+        size of Stratego's state space; the cited source gives it as the size of the game tree
+        \cite{perolat2022stratego}. The background chapter derived it from a formula that omitted
+        the Bombs and evaluates to about $10^{58}$. It now gives the number of setups, $40!$
+        divided by the factorials of the twelve piece counts, about $1.4 \times 10^{33}$ for one
+        player and $10^{66}$ for both, and cites the game tree separately.
+\end{itemize}
+The Expectamax search is now described as not evaluated: no run in this thesis measured its
+effect on playing strength.
+
+The Results chapter's example for scalar value collapse was also wrong as arithmetic. It said that
+a move with a 40\% chance of winning and a 60\% chance of losing, worth $-0.2$ in expectation,
+looks worse to a mean-based estimator than a certain draw worth $-0.3$. It looks better, since
+$-0.2 > -0.3$, so the example does not explain the draws, and the section now says so. The abstract
+described a study with human participants and usability assessments that no chapter reports, and
+aimed at play comparable to human opponents; it now states the evaluation that was done
+(agent-versus-agent games) and its results.
+
 \paragraph{Why.} Re-reading formal\_4 against the chapters (previous entry). That run had AAREN
 switched off, yet the chapters presented the falling loss and the self-play results as validation
 of both the Rainbow learner and AAREN.
@@ -864,6 +899,11 @@ rest is an inference, not a measurement. This is also why the earlier fixes did 
 behaviour. The material-only potential made the signal clean, but no larger than a fraction of an
 atom. The moved-piece planes and the priority fixes do not touch it. Nor would AAREN: it supplies
 information about hidden pieces, while this failure concerns pieces that are already revealed.
+(This reading was incomplete. formal\_8 made the signal larger and learnt nothing more
+(Section~\ref{sec:formal8}). Training this probe inside the run's own learner showed that the
+missing ingredient was contrast in the data rather than the size of the signal
+(Section~\ref{sec:ladder}); the outlook planes then supplied the comparison directly
+(Section~\ref{sec:outlook}).)
 
 \paragraph{Change.} The first and third were made for formal\_7 (Section~\ref{sec:formal7}). The
 options the probes support were, by cost: an expected-value loss beside the C51 loss (it doubled
@@ -1017,7 +1057,8 @@ and the opponent schedule had assumed skills the agent did not have.
         fleeing one that beats it. This is the whole game under full information, and it needs
         no inference. It is \emph{not} learned: from formal\_4 to formal\_7 the agent lost 59 to
         73\% of the attacks it chose on revealed pieces, and its values barely depend on the rank it
-        sees (Sections~\ref{sec:revealed-signal} and~\ref{sec:formal7}). An agent with this skill
+        sees (Sections~\ref{sec:revealed-signal} and~\ref{sec:formal7}). From formal\_9 on the
+        observation states each attack's outcome (Section~\ref{sec:outlook}). An agent with this skill
         should beat a random opponent nearly every time, because the random opponent offers its
         pieces at random. Winning 40\% of those games is itself a sign that the skill is missing.
   \item \emph{Inference about hidden pieces.} A piece that has moved is neither Bomb nor Flag. A
@@ -1121,7 +1162,8 @@ network trained on batches made only of these attacks; that network learned the 
 run, a signal two and a half times larger left the network's response to the rank at chance.
 Something that differs between the probe and the run stops it: the mix of the batch, the moving
 bootstrapped targets, the NoisyNet head, or the rest of the training pipeline. Which one is the
-next question. A direct test is to train the probe's fresh network on batches drawn from the
+next question. (Answered in Section~\ref{sec:ladder}: none of them stops it; the run's data lack the
+contrast between ranks that the probe's random targets have.) A direct test is to train the probe's fresh network on batches drawn from the
 run's own replay buffer, adding one difference at a time, and watch the rank swap.
 
 \paragraph{Lesson.} A probe that isolates one factor can show that the factor is \emph{sufficient}
@@ -1129,6 +1171,1211 @@ to explain a failure, not that it is the explanation. The capacity probe showed 
 learnt slowly; the run with a larger signal learnt nothing more. Before scaling a fix up to a full
 run, reproduce the failure inside the probe by adding back the run's conditions one at a time,
 until the probe fails as the run does.
+
+% ------------------------------------------------------------------------------------------
+\section{Checking the inputs before the learner}
+\label{sec:inputs-check}
+
+\paragraph{Check.} Before looking further for why skill~3 was not learnt
+(Section~\ref{sec:formal8}), the inputs it depends on were checked. In 30 games between two
+random players (26\,450 plies), both players' visible boards were compared with the real board
+after every ply. For every attack on a square whose rank plane was set, the outcome predicted
+from the planes was compared with the real battle. Three baselines were also measured, 40 games
+each under the evaluation rules: random against random, the heuristic against random, and the
+heuristic against itself.
+
+\paragraph{Result.} No square showed a piece that was not there, a wrong rank, or a hidden marker
+on an empty square. In all 457 attacks on revealed pieces the planes predicted the real outcome. The
+random player lost 70\% of those attacks (320 lost, 32 tied, 105 won). A revealed piece is a
+survivor of an earlier battle, so it is usually strong or a Bomb. The 60 to 78\% that formal\_4 to
+formal\_8 lost is therefore what choosing attacks at random gives. The baselines:
+\begin{center}
+\small
+\begin{tabular}{lccc}
+\toprule
+Pairing (40 games) & wins / losses / draws & revealed attacks lost \\
+\midrule
+random against random & 6 / 6 / 28 & 65\% \\
+heuristic against random & 29 / 8 / 3 & 0\% \\
+heuristic against heuristic & 8 / 16 / 16 & 0\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+formal\_8 won 10 to 18 and lost 18 to 23 of its 40 evaluation games against the random player
+between episodes 500 and 2000. It lost to random more often than random loses to random:
+engagement without skill~3 is worse than not fighting.
+
+\paragraph{Lesson.} Before hunting a learning failure, check that the inputs the decision needs
+are correct, and measure what a random choice scores on the same measure. Here the inputs were
+exact, and the agents' ``skill'' measure sat at the random player's value.
+
+% ------------------------------------------------------------------------------------------
+\section{The run's learner on the capacity probe}
+\label{sec:ladder}
+
+\paragraph{Question.} Section~\ref{sec:formal8} proposed training the probe's network inside the
+run's own learner, adding the run's conditions one at a time until it fails as the run does.
+
+\paragraph{Measurement.} 64 heuristic games gave 22\,834 transitions (with their mirror images)
+and 7\,014 positions with an attack available; 300 were held out. Synthetic attacks were made as in
+Section~\ref{sec:revealed-signal}: the target square edited to a revealed piece of random rank,
+a terminal transition rewarded $0.3\,o$ for the battle outcome $o$, with the mirror image and the
+fourfold revealed-attack priority. A fresh agent was trained with the run's update step
+unchanged (prioritized replay, mixed precision, NoisyNet, the mean loss, learning rate
+$3\cdot10^{-5}$, batches of 128). The measure is the rank swap of Section~\ref{sec:formal7}.
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Replay memory & 250 & 1000 & 2000 & 4000 updates \\
+\midrule
+synthetic attacks only & 82\% & 100\% & 100\% & \\
+5\% synthetic among real transitions & 64\% & 80\% & 82\% & 82\% \\
+\quad the same, NoisyNet off & 64\% & 81\% & 77\% & 75\% \\
+20\% synthetic among real transitions & 67\% & 96\% & 99\% & 97\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+With synthetic attacks only, the learnt gap reached 0.57 of the ideal 0.60. At 5\% it was about
+0.15, at 20\% 0.45 to 0.49. A second probe asked whether the network can imitate the heuristic: on
+2000 held-out positions (17.7 legal moves on average, chance 5.7\%) the cold start's update step
+agreed with the heuristic's move in 47\% of positions after 500 updates and 53\% after 5000. A
+cross-entropy over the legal moves at learning rate $3\cdot10^{-4}$ reached 53 to 55\%; the
+heuristic breaks ties at random, so its ceiling is below 100\%.
+
+\paragraph{Reading.} The update step, the network, NoisyNet and mixed precision all learn the rule
+quickly when the batch shows it; dilution slows it, and NoisyNet plays no part. Even at 5\% the
+rule was learnt to about 80\%, while the run sat at chance (53\%). What the probe has and the run's
+data lack is \emph{contrast}. In the probe the target's rank is drawn at random; in real games a
+revealed piece next to one's own is almost always a strong survivor or a Bomb. A revealed Scout
+beside one's Miner hardly ever occurs, so the run's data barely show that the rank matters. The
+rank swap asks about positions the run never trains on. This also explains formal\_8: a larger
+reward for an exchange does not create the missing variation.
+
+\paragraph{Lesson.} A decision is learnt from the variation the data show. When the variation that
+matters is rare in the agent's own games, scaling its reward does not help; it has to reach the
+learner through the data or through the input.
+
+% ------------------------------------------------------------------------------------------
+\section{Battle-outlook planes (formal\_9)}
+\label{sec:outlook}
+
+\paragraph{Change.} The observation grew from 32 to 41 planes. For every own piece and each of
+the four directions of the action encoding, two planes give the probability that attacking the
+enemy piece it would reach wins and that it loses (a Scout reaches the first piece along the
+line, every other piece the adjacent square). A ninth plane gives, for every own piece, the
+largest probability that an adjacent enemy piece would beat it by attacking (a Bomb or the Flag
+never attacks). For a revealed target the probability is the battle rule. For a hidden one it is
+the rank distribution of its class: the rank counts of all hidden enemy pieces are public, since
+every captured piece was revealed in its battle. A piece that made a long move is a Scout, a piece
+that moved is not a Bomb or the Flag, and the unmoved pieces share what is left. The environment
+now records these counts with each state; the GUI bot computes them from its board, and the
+browser engine computes all nine planes itself. The thesis's observation and the earlier probes
+of Section~\ref{sec:revealed-signal} gave the network only the ranks.
+
+\paragraph{Why.} Section~\ref{sec:ladder}. Skill~3 of Section~\ref{sec:skill-ladder} needs no
+inference, only the battle rule; like the action mask for skill~1, the observation can supply it.
+The per-square advantage head then reads, at the square of each piece, how each of its attacks
+would end. The capacity probe had found that planes stating the outcome hardly helped a network
+trained on synthetic attacks alone (72\% against 68\%); in the run the question is a different
+one, whether the agent's own games teach it to use the outcome.
+
+\paragraph{Check.} In 40 random games all 636 attacks on revealed pieces ended as the planes said.
+In 832 attacks on hidden pieces the mean predicted chance of winning was 0.40 and 36\% were won;
+by bins of the predicted chance (0--0.2, 0.2--0.4, 0.4--0.6, 0.6--0.8, 0.8--1) 6, 18, 41, 58 and 92\%
+were won. The browser engine's planes matched Python's within $10^{-4}$ in six replayed games.
+Computed with precomputed ray indices and two gathers, the planes take 3.7\,ms for 16 states on
+the GPU (14.6\,ms for the first version, which shifted the board once per square of each ray).
+
+\paragraph{Result.} formal\_9 is formal\_8 with the 41 planes. At episode 500 it beat the random
+opponent 17--12 (formal\_8: 10--23) and lost 46\% of its attacks on revealed pieces against it
+(63\%); against the heuristic it lost 44\% of them (77\%). A probe of that checkpoint in 12 greedy
+games against random: of 1866 positions with an attack the planes mark as a sure loss, the agent
+chose one in 64; of 272 with a sure win available it took it in 86. Its values ranked the classes
+correctly (sure-loss attacks $-0.128$, quiet moves $-0.078$, sure wins $-0.043$), with gaps about
+half the immediate material reward (a revealed Sergeant is worth $5 \times 4/148 = 0.14$). The
+measure did not improve further from episode 500 to 1500 (44 to 46\%).
+
+\paragraph{Lesson.} When a decision depends on a rule applied to information already in the
+observation, put the rule's result in the observation. The learner is then left with what the
+result is worth, which is the part that needs the reward.
+
+% ------------------------------------------------------------------------------------------
+\section{A higher learning rate (formal\_10)}
+\label{sec:formal10}
+
+\paragraph{Change.} The learning rate rose from $3\cdot10^{-5}$ to $10^{-4}$; everything else is
+formal\_9.
+
+\paragraph{Why.} formal\_9 ranked the moves correctly but by small gaps, and the probes of
+Section~\ref{sec:revealed-signal} learnt small differences of the mean slowly at
+$3\cdot10^{-5}$.
+
+\paragraph{Result.} At episode 500 formal\_10 beat random 24--10 and the heuristic 11--15 (formal\_9:
+17--12 and 3--22), losing 40 and 38\% of its revealed attacks. In the same probe, sure wins were taken
+in 45\% of positions (formal\_9: 32\%) and the gap between sure wins and quiet moves was 0.125
+(0.035). Most of the sure losses it still chose were deliberate: of 33 in six games, 20 were made
+by a Scout and 16 by a piece the threat plane marked as about to be taken anyway. A Scout's
+sacrifice also resets the no-battle counter. The share of revealed attacks lost therefore counts
+cheap sacrifices as mistakes; sure-loss attacks by a non-Scout that is not threatened would be a
+cleaner measure of skill~3. Against random it then stayed level (21--16 at episode 1000, 21--11 at
+1500), and all of its 10 losses in 30 games at episode 1000 were by running out of movable pieces,
+with 6.9 own pieces left against 11.4 (Section~\ref{sec:formal11}).
+
+\paragraph{Lesson.} A measure of a skill should count only the errors of that skill. Losing an
+attack is a mistake for a Captain that had a safe move, not for a Scout sent to spend itself.
+
+% ------------------------------------------------------------------------------------------
+\section{A potential that paid for attrition (formal\_11)}
+\label{sec:formal11}
+
+\paragraph{Observation.} formal\_10 lost to the random opponent only by running out of movable
+pieces. The material term of the potential explained part of it. A hidden enemy piece counted as
+the mean rank of an army, 3.7, and a revealed Bomb or Flag as 0. A Scout (2) that attacked a
+hidden Bomb and died therefore \emph{raised} the material term by $3.7 - 2 = 1.7$; a Sergeant (4)
+lowered it by only 0.3. Any lost attack on a hidden piece weaker than 3.7 gave back part of the
+loss in the same way. Throwing cheap pieces at unmoved pieces, 41 to 49\% of which are Bombs or the
+Flag (Section~\ref{sec:formal6}), was rewarded.
+
+\paragraph{Change.} The enemy's material is now computed from the public rank counts of its hidden
+pieces, so it is exact: a reveal leaves the potential unchanged, and only captures move it. A
+test checks that a Scout lost to a hidden Bomb lowers the potential by exactly $5 \times 2/148$.
+
+\paragraph{Result.} At episode 500 formal\_11 beat random 23--15 and the heuristic 12--12 with 30
+and 31\% of revealed attacks lost; at 1000 23--12 and 10--13: about formal\_10's level. It still lost
+11 of 30 games against random by running out of movable pieces. Counted over 20 games, it attacked
+about 40 times a game: it won 8.4 attacks on hidden moved pieces, 4.0 on hidden unmoved ones and 6.3
+on revealed ones, and lost or tied 7.8, 8.3 (3.35 of them to Bombs) and 4.8 (1.0 to a revealed Bomb).
+Another 6.2 pieces a game were taken by the opponent's attacks. It spent about 21 of its 33 movable
+pieces in its own attacks.
+
+\paragraph{Lesson.} Potential-based shaping leaves the optimal policy unchanged \cite{NgPBRS}, but a
+learner far from convergence follows the immediate shaping. A potential that estimates what it
+cannot see must not reward revealing it: compute the hidden part exactly from public information
+where possible, or make the estimate unbiased for the pieces the agent actually attacks.
+
+% ------------------------------------------------------------------------------------------
+\section{A mobility term in the potential (formal\_12)}
+\label{sec:formal12}
+
+\paragraph{Change.} The potential gained the term $g(n_{\mathrm{own}}) - g(n_{\mathrm{enemy}})$, with
+$n$ the number of a side's movable pieces and $g(n) = \ln(1+n)/\ln 34$, at weight 1. It is concave,
+so the last movable piece costs 0.20, the second-last 0.12, the fifth-last 0.05 and one of 33 only
+0.008, on top of its material. Both counts are public. The potential then lies in $[-6, 6]$, so the
+support of the value distribution was widened to $\pm 7$ (0.28 per atom).
+
+\paragraph{Why.} Section~\ref{sec:formal11}: a side without a movable piece loses, but the material
+term priced the last Sergeant like the first, and an even exchange was worth nothing.
+
+\paragraph{Result.} At episode 500 formal\_12 beat random 30--7 (75\%), the first run past the 70\%
+gate of stage~1; against the heuristic it won 10, lost 12 and drew 18. In 30 games against random it lost 5 by
+running out of movable pieces (formal\_11 at the same episode: 11). Against the heuristic, 7 of 30
+games were lost by the capture of its own Flag (after 212 turns on average, with 13 own pieces left)
+and 12 were no-battle draws. After episode 500 it did not improve: random 27--10 at episode 1000,
+17--19 at 1500, 26--10 at 2000; the heuristic 8--14, 12--19 and 9--13. Section~\ref{sec:cold-start-level}
+shows why.
+
+\paragraph{Lesson.} Value a resource by what losing it does to the game, not by a linear count: a
+concave term in the potential makes the last units count most without changing the optimal policy.
+
+% ------------------------------------------------------------------------------------------
+\section{The cold start sets the level}
+\label{sec:cold-start-level}
+
+\paragraph{Observation.} formal\_12's training games did not improve from the first 250 episodes on.
+Against the heuristic it won 36, 36, 38, 36, 39 and 32 games of each 250-episode block (about 23\%
+of those games), while its training loss fell from 2.22 to 1.42. In 1500 episodes the learner made
+33\,585 updates, 22 per episode at about 55\,ms each; with a target copy every 1000 updates, the
+outcome had been bootstrapped through about 34 target networks.
+
+\paragraph{Measurement.} A fresh agent with formal\_12's code was given only the cold start: 100
+heuristic games (35\,198 transitions) and pre-training, without a single training episode. In 40
+evaluation games against each opponent:
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+Agent & against random & against the heuristic \\
+\midrule
+cold start only, 5000 updates (as in every run) & 27 / 6 / 7 & 7 / 13 / 20 \\
+cold start only, 20\,000 updates & 23 / 14 / 3 & 9 / 12 / 19 \\
+formal\_12, episodes 500 / 1000 / 1500 / 2000 & 30, 27, 17, 26 wins & 10, 8, 12, 9 wins \\
+\bottomrule
+\end{tabular}
+\end{center}
+(wins / losses / draws.) All the runs of this section's sequence, at equal episodes:
+\begin{center}
+\small
+\begin{tabular}{llcccc}
+\toprule
+Run & episode & against random & lost & against the heuristic & lost \\
+\midrule
+formal\_8  & 500  & 10 / 23 / 7  & 63\% & 4 / 23 / 13  & 77\% \\
+formal\_9  & 500  & 17 / 12 / 11 & 46\% & 3 / 22 / 15  & 44\% \\
+formal\_9  & 1500 & 25 / 8 / 7   & 44\% & 7 / 19 / 14  & 47\% \\
+formal\_10 & 500  & 24 / 10 / 6  & 40\% & 11 / 15 / 14 & 38\% \\
+formal\_10 & 1500 & 21 / 11 / 8  & 35\% & 10 / 15 / 15 & 31\% \\
+formal\_11 & 500  & 23 / 15 / 2  & 30\% & 12 / 12 / 16 & 31\% \\
+formal\_11 & 1000 & 23 / 12 / 5  & 34\% & 10 / 13 / 17 & 27\% \\
+formal\_12 & 500  & 30 / 7 / 3   & 28\% & 10 / 12 / 18 & 40\% \\
+formal\_12 & 1000 & 27 / 10 / 3  & 41\% & 8 / 14 / 18  & 41\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+(``Lost'': the share of the agent's attacks on revealed pieces that it lost.) With 40 games the
+standard deviation of a win rate near one half is about 8 percentage points, so most of the
+differences after formal\_9 lie within noise.
+
+\paragraph{Reading.} The reinforcement learning phase added nothing measurable in 2000 episodes.
+The agent plays at the level of the heuristic it imitated (the heuristic beats random 29--8 and
+itself 8--16, Section~\ref{sec:inputs-check}). The gains since formal\_8, from 10--23 to about 27--8
+against random, are a better starting point: the outlook planes let the network take up the
+heuristic's comparisons of ranks. Whether formal\_8's own cold start started that low or its
+reinforcement learning pulled it down was not measured. Pre-training four times longer on the same
+35\,198 transitions did not help; against random it did worse.
+
+\paragraph{Lesson.} Measure the starting point alone before crediting a run's level to its
+reinforcement learning. While the learning signal is this weak, the demonstrator sets the ceiling.
+
+% ------------------------------------------------------------------------------------------
+\section{A stronger teacher: the outlook expert}
+\label{sec:expert}
+
+\paragraph{Change.} A new scripted player, the outlook expert, can play the demonstrations and
+serve as an opponent. It looks one move ahead and reads only public information, through the
+network's own observation and the rank distribution of every enemy piece. Each legal move gets a
+score in units of piece value (Marshal 11, General 8, Colonel 6, Major 4.6, Captain 3.4, Lieutenant
+2.6, Sergeant 2, Scout 1.2, Spy 3, Miner 3, Bomb 1, Flag 25). An attack scores the expected value of
+the battle over the target's rank distribution, plus the risk of standing on the square afterwards.
+Every move scores the change in risk to the moved piece: the strongest adjacent enemy's chance to
+beat it, times its value, times 0.6. Cheap pieces advance. Pieces are drawn toward the unmoved
+hidden pieces, where the Flag can be, more strongly in the endgame (15 enemy pieces or fewer) and as
+the no-battle counter runs. Attacks near the own Flag count more, and a piece guarding the Flag
+stays. Its score terms explain each move it makes.
+
+\paragraph{Why.} Section~\ref{sec:cold-start-level}: the teacher sets the level.
+
+\paragraph{Result.} Under the evaluation rules (100 games against each, about 0.4\,s a game on the
+CPU) the expert beat random 86--3 with 11 draws and the heuristic 79--11 with 10 draws, and lost none
+of its attacks on revealed pieces. The Flag is valued at 25 rather than at a game-winning amount:
+early on its probability is spread over some 30 unmoved pieces, and a large value would make every
+one of them look worth attacking. At 25 an early probe is worth little and the last few unmoved
+pieces a great deal. (This value was chosen by that argument; other values were not tried.)
+
+A cold start from 400 expert games (the expert won 350 of them; 126\,368 transitions), with the
+trainer's pre-training and no training episodes, gave in 40 games against each opponent:
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Pre-training updates & random & heuristic & expert & revealed attacks lost \\
+\midrule
+5000   & 27 / 11 / 2 & 16 / 16 / 8 & 7 / 27 / 6 & 41 to 54\% \\
+10\,000 & 28 / 10 / 2 & 21 / 15 / 4 & 7 / 31 / 2 & 40 to 55\% \\
+20\,000 & 24 / 16 / 0 & 21 / 16 / 3 & 9 / 30 / 1 & 39 to 57\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+Against the heuristic the agent more than doubled its wins (7 to 9 with the heuristic as teacher).
+But it lost about half of its attacks on revealed pieces, where its teacher lost none: it took up
+the expert's appetite for battle, not its choice of battles. (In the runs taught by the heuristic
+the large-margin loss ended pre-training at 0.063 to 0.084, against its margin of 0.1, so the
+pre-training did not rank the demonstrator's move first by the margin; it was not recorded here.) A behaviour
+cloning loss (the cross-entropy of the expert's move over the legal moves) was measured in the
+subsequent probe (Section~\ref{sec:behaviour_cloning}).
+
+\paragraph{Lesson.} A better teacher raises the starting point, but only as far as the imitation
+loss transfers the teacher's decisions. Check that the student makes the teacher's key decisions,
+not only that it wins more often.
+
+% ------------------------------------------------------------------------------------------
+\section{Playing in the browser, with reasons}
+\label{sec:browser}
+
+\paragraph{Change.} The browser player (\texttt{web/play.html}) now runs formal\_12's network of
+episode 500 (exported to ONNX, 41 planes, 6.1\,MB) and computes the outlook planes itself. Next to
+each of the bot's six best moves it shows the move's value and a reason read from the planes the
+network saw: ``attack: wins'', ``attack: loses'', ``attack: 5\% win / 75\% lose'', or ``threatened
+piece moves away''. One network call per move runs in the page, with no server.
+
+\paragraph{Check.} The page loaded the model with 41 input planes. The bot's first move was a7--a4,
+a Scout's long attack shown as ``Q 0.032, attack: 5\% win / 75\% lose'' above the quiet moves (Q
+$-0.05$). The Scout met a Lieutenant: a scouting sacrifice that revealed a piece.
+
+\paragraph{Lesson.} An observation built from explicit quantities makes a learnt policy easier to
+explain: the same planes that helped it learn are the vocabulary of its reasons.
+
+% ------------------------------------------------------------------------------------------
+\section{The teacher's moves: behaviour cloning on legal actions}
+\label{sec:behaviour_cloning}
+
+\paragraph{Change.} The demonstration loss is replaced with behaviour cloning over the state's
+legal moves:
+\[
+L_{\text{BC}} = -\log \frac{\exp(Q(s, a_E) / \tau)}{\sum_{a \in \mathcal{A}(s)} \exp(Q(s, a) / \tau)}
+\]
+with temperature $\tau = 0.25$ and weight $1.0$ (disabling the large-margin hinge loss, which
+punished only the single argmax runner-up and left illegal or suicidal moves unpenalised). At the
+same time, dropout in the online spatial self-attention block (which stayed active in train mode
+during replay updates) was set to $0.0$, eliminating rank-order jitter during replay and Double DQN
+target evaluations. A third, unused copy of the network (\texttt{reference\_network}) was also made
+conditional on KL regularisation being enabled.
+
+\paragraph{Why.} In formal\_13 (2\,000 episodes), the agent remained stuck in Phase 1 (Physics of
+War), winning only 27.5\% of evaluation games against the heuristic and losing 37 to 55\% of its
+revealed attacks. The hinge loss \(\max_{a \neq a_E}[Q(a) + 0.1] - Q(a_E)\) stopped improving at
+0.085, unable to rank the expert's move above 30+ other legal choices when attention dropout jittered
+the Q-values at every gradient step.
+
+\paragraph{Result.} On 66\,576 transitions from 200 held-out expert games, five variants were
+pre-trained for 5\,000 updates and evaluated greedily over 40 games against each opponent:
+
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Variant & vs Random & vs Heuristic & vs Expert & Revealed lost \\
+\midrule
+Margin (dropout 0.1) & 27 / 9 / 4 (67.5\%) & 11 / 20 / 9 (27.5\%) & 9 / 27 / 4 (22.5\%) & 47\% \\
+Margin (dropout 0.0) & 27 / 10 / 3 (67.5\%) & 13 / 17 / 10 (32.5\%) & 10 / 30 / 0 (25.0\%) & 37\% \\
+BC ($\tau = 0.1$) & 38 / 2 / 0 (95.0\%) & 26 / 9 / 5 (65.0\%) & 0 / 2 / 38 (95.0\% D) & 14\% \\
+\textbf{BC ($\tau = 0.25$)} & \textbf{37 / 2 / 1 (92.5\%)} & \textbf{29 / 9 / 2 (72.5\%)} & \textbf{0 / 1 / 39 (97.5\% D)} & \textbf{17\%} \\
+BC ($\tau = 0.1$) + Margin & 37 / 2 / 1 (92.5\%) & 25 / 10 / 5 (62.5\%) & 2 / 1 / 37 (92.5\% D) & 18\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+Behaviour cloning with $\tau = 0.25$ immediately clears the Phase 1 curriculum threshold (50\% vs
+heuristic) straight out of cold start (72.5\% wins), draws 39 of 40 games against its expert
+teacher (losing only once), and cuts revealed attack blunders to 17\% (5 blunders in 15 attacks
+against the expert).
+
+\paragraph{Lesson.} A hinge margin pushes down only the closest rival; in games with high branching
+factors, cross-entropy over legal moves suppresses the entire distribution of bad moves at once.
+
+% ------------------------------------------------------------------------------------------
+\section{Ten-thousand-episode run: formal\_14}
+\label{sec:formal14}
+
+\paragraph{Change.} Launching a full 10\,000-episode run (\texttt{runs/formal\_14}) incorporating:
+\begin{itemize}
+  \item Cold start from \texttt{OutlookExpert} with behaviour cloning ($\tau = 0.25$, weight 1.0,
+        5\,000 pre-training updates, 10\% batch share decaying to 0 by episode 5\,000).
+  \item Spatial self-attention dropout set to 0.0 in the online network.
+  \item Replay update interval reduced from 8 to 4 steps (providing $\sim$440\,000 gradient updates
+        across 10k episodes without learner lag).
+  \item Replay buffer capacity doubled to 150\,000 transitions ($\sim$430 games of history,
+        consuming $\sim$1.8\,GB of the 6.44\,GB GPU VRAM).
+  \item Learning rate set to $0.0001$, checkpointing every 500 episodes, and adding \texttt{OutlookExpert}
+        to the 500-episode periodic evaluation suite.
+\end{itemize}
+
+\paragraph{Result.} Read at episode 5\,000 (393\,845 updates). The 40-game evaluations were flat over
+the run: wins against the heuristic were 25, 23, 25, 21, 24, 26, 21, 20, 18 and 22 at episodes 500 to
+5\,000, the level the cold start had set, and wins against the expert never exceeded 8.
+
+The plotted loss fanned out from about update 280\,000 and fell off a cliff near update 375\,000. Both
+come from the demonstrations. The batch held $\mathrm{round}(128 \times 0.10 \times (1 - e/5000))$ of
+them, 12 falling to 0, and the cloning term is a mean over those rows at a fixed weight of 1, so its
+noise grew as the rows ran out. The 99th percentile of the loss was 2.85 with five rows, then 3.11,
+3.70, 5.03 and 8.25 with one row (maximum 19.1, one position against 127 in the C51 term). The formula
+reaches zero rows at episode 4\,805; the largest loss in five episodes fell from 12.6 to 1.44 between
+episodes 4\,805 and 4\,810 and stayed below 1.5. The C51 loss itself did not fail: its median kept
+falling (1.22 before, 0.91 at the end).
+
+Removing the term did collapse the policy. Comparing the checkpoints on either side of it:
+
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+Measure & Episode 4\,500 & Episode 5\,000 \\
+\midrule
+Best minus second-best legal $Q$ (3\,000 own positions) & 0.126 & 0.006 \\
+Best minus worst legal $Q$ (same positions) & 0.587 & 0.049 \\
+Agreement with the expert's move (2\,500 positions) & 45.8\% & 14.6\% \\
+Vs heuristic, 100 games (W/L/D) & 64 / 12 / 24 & 41 / 23 / 36 \\
+Vs expert, 100 games (W/L/D) & 7 / 31 / 62 & 0 / 52 / 48 \\
+Vs random, 100 games (W/L/D) & 86 / 6 / 8 & 82 / 6 / 12 \\
+\bottomrule
+\end{tabular}
+\end{center}
+The two checkpoints chose the same greedy move in 13\% of those positions. The NoisyNet scale was not
+the cause: the mean $|\sigma|$ fell from 0.0187 to 0.0153 after episode 4\,800, in the value layers
+(0.0206 to 0.0168 and 0.0157 to 0.0130) while the last advantage layer did not move (0.0284 to 0.0283).
+Noise nevertheless changed the greedy move in 31\% of the expert positions at episode 5\,000, against
+14\% at 4\,500, because the gaps it competes with had shrunk twentyfold. The share of training games won by flag
+capture also fell, from 0.34 in episodes 4\,400 to 4\,600 to 0.14 in 4\,600 to 4\,800, before the last
+demonstration left; that fall was not explained.
+
+\paragraph{Later reading: the evaluations against the expert.} The wins hide a change the losses
+show. In the 40-game evaluations against the expert the agent went 2 / 3 / 35 (wins / losses /
+draws) at episode 500 and 0 / 4 / 36 at episode 1\,000: it drew with its teacher, as the cold start
+alone had (Section~\ref{sec:behaviour_cloning}). From episode 1\,500 to 4\,500 it went 6 / 16 / 18,
+6 / 19 / 15, 8 / 22 / 10, 2 / 27 / 11, 3 / 15 / 22, 7 / 12 / 21 and 3 / 19 / 18: 12 to 27 losses in
+every evaluation, against 3 and 4 before. The demonstrations were still 9 of the 128 rows of a
+batch at episode 1\,500, so this began some 3\,300 episodes before the last demonstration left.
+Against the heuristic the same evaluations stayed level (18 to 26 wins). Two things changed between
+episodes 1\,000 and 1\,500, and the run does not separate them: the demonstration share kept
+falling, and the third stage added a 500-episode-old copy of the agent to the opponents. The
+reinforcement learning therefore did not merely add nothing to the cloned policy. Against the
+strongest fixed opponent it made the policy worse while the cloning term was still in the loss,
+and the evaluation against the weaker heuristic did not show it.
+
+\paragraph{Lesson.} A falling loss can mean the network has stopped distinguishing actions. Here the
+differences between moves were held up by the cloning term and the C51 targets did not sustain them,
+so a demonstration schedule that decays to zero removes the policy with it; a mean over the rows of a
+shrinking subset also needs its weight scaled with the subset. Verify all architectural assumptions and cold-start transfer in fast, isolated
+probes before committing GPU hours to an overnight multi-thousand episode run.
+
+% ------------------------------------------------------------------------------------------
+\section{A batched game engine on the GPU}
+\label{sec:vec-engine}
+
+\paragraph{Change.} A second implementation of the game (\texttt{vec/engine.py}) holds any number
+of games as tensors on the GPU and steps them together. The board is stored in the frame of the
+side to move and rotated by 180 degrees after every ply, so no rule depends on which player is
+moving. The rules, the 41 observation planes and the 3\,600-action encoding are those of the
+original environment. A test replays games of random and attacking moves on both implementations
+and compares the legal moves, every observation plane, the ending and the winner on every ply; on
+the GPU the same check ran over 32 games and 29\,955 plies. The outlook expert was ported the same
+way: one call scores all 3\,600 actions of every game, and the scores equal the original's to
+within $10^{-3}$ on more than 1\,000 moves.
+
+\paragraph{Why.} formal\_14 made 393\,845 updates and 1\,575\,961 environment steps in about ten
+hours: about 95\,ms per update and 42 steps per second. The learner was the cost, with three passes
+of a 3\,600 $\times$ 51 output for a batch of 128, so faster environment code could not help (the
+author reports that an earlier port of the environment to Rust gained about 5\%; this was not
+re-measured). A different learner needs far more games per second, and then the game itself
+becomes the limit.
+
+\paragraph{Result.} The first batched version played about 27\,000 plies per second with the
+observation, or 38\,ms per ply of 1\,024 games, and did not speed up from 1\,024 to 4\,096 games.
+A profile by operation found three causes. A cumulative sum over a boolean tensor is promoted to
+64-bit integers and was most of the cost of the legal-move mask; eight chained logical ANDs along
+the nine squares of a line replaced it. Indexing with a three-dimensional index tensor became an
+index-select on a flat index. Three general tensor contractions over one-hot planes became a table
+lookup by rank and one sum. After these changes 1\,024 games cost 0.9\,ms for the legal-move mask,
+5.0\,ms for the observation and 4.1\,ms for a step, and the outputs were unchanged (the tests
+above). The network's forward pass, 10\,ms for 1\,024 positions, is the larger cost again.
+
+One difference from the original was found and kept as a correction. When a Scout on one edge of
+the board looks down a line that is empty to the far edge, the original outlook plane reads the
+contents of square 0 instead of nothing (3 of the 29\,955 positions).
+
+\paragraph{Lesson.} Vectorised code has to be profiled operation by operation: one promoted data
+type cost more than the rest of the step together. A second implementation is only worth its speed
+if a test holds it to the first one on every ply.
+
+% ------------------------------------------------------------------------------------------
+\section{The outlook expert is a passive defender}
+\label{sec:passive-expert}
+
+\paragraph{Observation.} With the batched engine a match of 1\,000 games takes about half a
+minute. The outlook expert beat the random player 950 to 11 with 39 draws. Against itself it won 4,
+lost 5 and drew 991, all 991 by the 200-ply no-battle rule, after 289 plies on average. Two random
+players went 209 / 201 / 590.
+
+\paragraph{Reading.} In the expert's score, attacking a hidden piece has a negative expected
+value and a quiet move has no term that leads towards a battle, so two experts wait for each other.
+This revises the reading of Section~\ref{sec:behaviour_cloning}, where the cloned network ``drew
+39 of 40 games with its teacher'': that was not parity of skill but two players refusing to
+attack. The expert beats opponents that attack it and has no way to win against one that does not.
+
+\paragraph{Change.} Three optional terms were added to the batched expert, all zero by default so
+that it still equals the original. \emph{Pursuit} draws a quiet move towards enemy pieces the moved
+piece could attack with positive expected value, weighted by the expected gain and falling with
+the square of the distance. \emph{Repel} pushes it away from pieces likely to beat it, beyond the
+adjacent square. \emph{Probe} rewards attacking a hidden piece with a cheap piece.
+
+\paragraph{Result.} Against the original expert, 600 games each (wins / losses / draws):
+\begin{center}
+\small
+\begin{tabular}{lc}
+\toprule
+Terms & against the original expert \\
+\midrule
+pursuit 1.0 & 142 / 53 / 405 \\
+pursuit 3.0 & 190 / 82 / 328 \\
+probe 1.0 & 12 / 10 / 578 \\
+probe 2.5 & 13 / 17 / 570 \\
+pursuit 1.0, probe 1.0 & 168 / 42 / 390 \\
+pursuit 2.0, probe 1.5, repel 0.5 & 221 / 62 / 317 \\
+pursuit 3.0, probe 2.5, repel 1.0 & 193 / 65 / 342 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Probing alone changed nothing, because the pieces never met. A hill climb over these weights and
+the expert's own constants, in which a candidate replaces the champion when it wins a match of 800
+games by a net four per cent, accepted few candidates in 93 trials (most single changes lie within
+the noise of a match). Its last champion beat the original expert 348 to 96 with 356 draws and the
+random player 385 to 8.
+
+\paragraph{Lesson.} A one-ply evaluation needs a term whose value changes with distance to what
+it wants, or it values captures it will never stand next to. And a draw between a student and its
+teacher shows that they play alike, not that they play well.
+
+% ------------------------------------------------------------------------------------------
+\section{A policy-value network, cloned in minutes}
+\label{sec:pv-clone}
+
+\paragraph{Change.} The Q-network was replaced by a network with a policy of its own
+(\texttt{vec/net.py}): a residual tower of six blocks and 64 channels without normalisation
+layers, a policy head with one logit for each of the 3\,600 actions, and a value head with one
+output in $[-1, 1]$ for the side to move. It is cloned from the expert on a stream of batched
+games (\texttt{vec/clone.py}). On every ply of 2\,048 games the expert scores the legal moves and
+the network is trained towards the softmax of the scores at temperature 0.03. Each side of a game
+is driven by the expert (30\%), the expert with a quarter of its moves random (20\%), the random
+player (10\%) or, after 300 updates, the network itself (40\%), so the network is also labelled on
+the positions its own mistakes lead to \cite{DAgger}.
+
+Three additions came with it. The observation grew from 41 to 59 planes, all public information:
+the share of each enemy rank that is still hidden (12 planes), the own pieces that have moved and
+that have made a long move, and the from- and to-squares of the last two moves. A captured piece
+only vanishes from the 41 planes, so whether the enemy Marshal or Spy was still in the game could
+not be read from them. A third head predicts the rank of the enemy piece on each square and is
+trained on the hidden ones against the true board, which the trainer knows. This is the task the
+thesis gave to AAREN, with a label for every hidden piece on every ply instead of only for the
+pieces battles reveal. Finally the setups are drawn from a bank of 40\% thesis setups (Flag in a
+back corner with Bombs beside it), 45\% structured ones (Flag anywhere in the back two rows with
+two or three Bombs around it, the other pieces by row preferences) and 15\% random ones.
+
+\paragraph{Why.} Section~\ref{sec:formal14}: in the Q-network the policy lived in differences
+between action values of a few hundredths, held up by the cloning term and lost with it.
+
+\paragraph{Result.} About 22\,500 labelled positions per second. After 70 seconds (447 updates)
+the greedy network beat the random player in 188 of 200 batched games, with 4 losses; the expert
+itself wins 95\%. After ten minutes (5\,588 updates, 59 planes, the mixed setups) it won 379 of
+400 against random and drew 396 of 400 with the expert, chose the expert's best move in 80\% of
+positions (equal-scored quiet moves keep this below 100\%), and named the rank of a hidden piece
+correctly 39.5\% of the time, where always naming the Scout would score 20 to 24\%
+(Section~\ref{sec:cold-start-level} gives the cold start of the earlier runs: 5\,000 updates on
+about 35\,000 positions in some nine minutes).
+
+\paragraph{Lesson.} When the teacher is a function that can be evaluated on any position, cloning
+is a streaming supervised problem and costs minutes; it should be treated as a starting point to
+be measured, not as a phase of the run.
+
+% ------------------------------------------------------------------------------------------
+\section{Self-play with a policy gradient improves on the clone}
+\label{sec:ppo}
+
+\paragraph{Change.} The cloned network was trained further by proximal policy optimisation
+\cite{PPO} on batched self-play (\texttt{vec/ppo.py}). Each iteration plays 128 plies of 1\,024
+games and makes two passes over the learner's decisions in minibatches of 4\,096 (learning rate
+$3 \times 10^{-4}$, clip 0.2, entropy weight 0.005, value weight 0.5, belief weight 0.25). The only
+reward is the result of the game: $+1$, $-1$, and $-0.5$ to both sides for a draw. Advantages are
+generalised advantage estimates \cite{GAE} ($\gamma = 0.998$, $\lambda = 0.95$) over each side's
+own sequence of decisions, so a result reaches a move through the returns that followed it and not
+through a chain of target networks. Half of the games are self-play, a quarter are against the
+original expert, 5\% against the random player and 20\% against frozen earlier copies of the
+learner, one kept every 25 iterations. For the first four iterations only the value head is
+trained.
+
+\paragraph{Why.} The first direction named in Chapter~\ref{chap:recommendations}: a learner whose
+policy does not depend on small differences between action values. A first version of the warm-up
+trained the value loss through the shared trunk. In one iteration the policy moved by a KL
+divergence of 0.26 and the greedy win rate against the random player fell from 94\% to 60\%, with
+the policy loss switched off: the cloned policy head depends on features the value loss was free
+to rewrite. The warm-up now steps the value head's own parameters only.
+
+\paragraph{Result.} From the ten-minute clone, on a GPU shared with the expert tuning, in 300
+batched games per line (wins / losses / draws):
+\begin{center}
+\small
+\begin{tabular}{rrcccc}
+\toprule
+Iteration & decisions & greedy vs random & greedy vs expert & sampled vs expert & sampled vs its start \\
+\midrule
+0 (clone) & 0 & 379 / 18 / 3 of 400 & 2 / 2 / 396 of 400 & -- & -- \\
+40  & 3.8 M  & 292 / 7 / 1 & 200 / 37 / 63 & 240 / 59 / 1 & 238 / 60 / 2 \\
+80  & 7.7 M  & 298 / 2 / 0 & 261 / 19 / 20 & 256 / 40 / 4 & 269 / 29 / 2 \\
+120 & 11.7 M & 295 / 5 / 0 & 241 / 16 / 43 & 278 / 18 / 4 & 281 / 16 / 3 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Iteration 40 was reached after about 12 minutes. In the training games the self-play went from 30
+decisive and 680 drawn games in iterations 1 to 5 to 1\,078 decisive and one drawn in iterations
+36 to 40. The run stopped after 45 minutes at iteration 132. That network was then evaluated in
+the original environment by the thesis's own routine, greedy, in 200 games against each opponent:
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+Opponent & wins / losses / draws & revealed attacks lost \\
+\midrule
+random          & 199 / 0 / 1  & 14\% \\
+heuristic       & 193 / 4 / 3  & 9\% \\
+smart heuristic & 152 / 1 / 47 & 9\% \\
+outlook expert  & 177 / 1 / 22 & 18\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+The best earlier result against the heuristic was 29 / 9 / 2 in 40 games, straight after cloning
+(Section~\ref{sec:behaviour_cloning}), and formal\_14 never won more than 8 of 40 against the
+expert.
+
+What the learner changed in its play, from 400 sampled games against the expert before and after
+40 iterations:
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+Measure & clone & iteration 40 \\
+\midrule
+Result (wins / losses / draws) & 7 / 5 / 388 & 309 / 84 / 7 \\
+Attacks per game & 2.7 & 20.2 \\
+Attacks on hidden pieces that have moved, won & 41\% of 0.9 per game & 76\% of 9.4 per game \\
+Attacks on hidden unmoved pieces, won & 8\% of 1.5 per game & 52\% of 7.8 per game \\
+Marshal lost, per game & 0.03 & 0.62 \\
+\bottomrule
+\end{tabular}
+\end{center}
+The first thing self-play found is that a hidden piece which has moved cannot be a Bomb and is
+usually weak, so a strong piece wins three such attacks in four. At that point it was bold and not
+yet careful: it lost its Marshal in most games, a third of those into a Bomb and a quarter to the
+Spy.
+
+\paragraph{Lesson.} Reinforcement learning improved on its starting point here for the first
+time in this project, within minutes. Four things differ from the Q-learner, and this run does not
+separate them: the policy is its own output, trained by a policy gradient; the game's result
+reaches a move through measured returns; twelve minutes hold more experience than formal\_14's ten
+hours (3.8 against 1.6 million decisions); and a draw costs both sides while half the games are
+self-play, so mutual stalling is the worst joint outcome. A plateau of a value-based learner at a
+few dozen updates per second said little about what reinforcement learning could do in this game.
+
+% ------------------------------------------------------------------------------------------
+\section{Three-hour PPO self-play and post-run audits (ppo\_2)}
+\label{sec:ppo2}
+
+\paragraph{Change.} The \texttt{ppo\_1} run of Section~\ref{sec:ppo} was resumed at iteration 132
+(12\,940\,127 decisions, six league snapshots) for three hours (\texttt{runs/ppo\_2}) to iteration
+771 (75.48\,M learner decisions recorded at iteration 770). Rollout size (1\,024 parallel games,
+128 plies), PPO hyperparameters (constant learning rate $3 \times 10^{-4}$, two epochs, minibatch
+4\,096, clip 0.2, entropy weight 0.005, value weight 0.5, belief weight 0.25, draw reward $-0.5$),
+and the diverse setup bank stayed as in \texttt{ppo\_1}. The opponent mix was broadened to 45\%
+self-play, 20\% scripted experts drawn uniformly from three styles---the original passive
+\texttt{expert}, the hand-set proactive \texttt{expert2} (pursuit 2.0, repel 0.5, probe 1.5), and
+the hill-climbed \texttt{expert3} of Section~\ref{sec:passive-expert} (pursuit 1.721, repel 0.5369,
+probe 0.6253, attack chance 0.3724, clock 0.4912, advance 0.0331, pull 0.7336, power 1.7568)---3\%
+random play, and 32\% frozen snapshots in a 12-slot league (one added every 40 iterations, sampled
+uniformly and evicted at random when full).
+
+\paragraph{Why.} Section~\ref{sec:ppo} showed 45 minutes of PPO self-play lifting the cloned
+network above the passive expert, while Section~\ref{sec:passive-expert} produced two proactive
+scripted opponents that attack instead of waiting. Continuing the run against all three expert
+styles and a deeper snapshot league tested how far pure PPO self-play would climb before hitting
+new limits.
+
+\paragraph{Result.} In the periodic 300-game batched evaluations on the diverse setup bank
+(wins / losses / draws):
+\begin{center}
+\small
+\begin{tabular}{rrccccc}
+\toprule
+Iter & decisions & greedy vs random & greedy vs expert & sample vs expert & sample vs expert2 & sample vs expert3 \\
+\midrule
+200 & 19.56\,M & 298 / 2 / 0 & 236 / 10 / 54 & 292 / 6 / 2  & 217 / 66 / 17 & 220 / 64 / 16 \\
+300 & 29.40\,M & 298 / 2 / 0 & 208 / 10 / 82 & 277 / 18 / 5 & 228 / 56 / 16 & 233 / 51 / 16 \\
+400 & 39.20\,M & 294 / 6 / 0 & 234 / 10 / 56 & 278 / 16 / 6 & 231 / 46 / 23 & 224 / 57 / 19 \\
+500 & 49.15\,M & 300 / 0 / 0 & 246 / 7 / 47  & 289 / 10 / 1 & 234 / 53 / 13 & 246 / 47 / 7  \\
+600 & 58.90\,M & 292 / 7 / 1 & 239 / 6 / 55  & 280 / 17 / 3 & 233 / 41 / 26 & 247 / 42 / 11 \\
+700 & 68.58\,M & 295 / 5 / 0 & 241 / 14 / 45 & 278 / 20 / 2 & 245 / 42 / 13 & 238 / 49 / 13 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Win rates rose against both proactive experts (from 72.3\% to 81.7\% against \texttt{expert2} and
+from 73.3\% to 82.3\% at iteration 600, 79.3\% at 700, against \texttt{expert3}). In a 600-game
+sampled head-to-head match on diverse setups, the final \texttt{ppo\_2} checkpoint beat
+\texttt{ppo\_1} 481 / 102 / 17 (80.2\% wins). Evaluated in the original thesis environment across
+400 games (100 against each of random, heuristic, smart heuristic, and outlook expert),
+\texttt{ppo\_2} scored 393 / 0 / 7 (98.25\% wins, zero losses) greedily and 397 / 2 / 1 (99.25\%
+wins) when sampled, including 100 / 0 / 0 against the outlook expert.
+
+\paragraph{Diagnosis: three limits exposed by auditing ppo\_2.} Although \texttt{ppo\_2} nearly
+saturated the fixed thesis opponents, inspecting its logs, draws, and belief head uncovered three
+structural weaknesses:
+\begin{enumerate}
+  \item \emph{Greedy oscillation draws.} Greedy play against the passive \texttt{expert} still
+        ended in 45 to 82 no-battle draws per 300 games (15 to 27\%), whereas sampled play drew
+        only 1 to 6. Inspecting those greedy draws showed that 59.5\% were pure two-square
+        $A \leftrightarrow B$ oscillations and 83.8\% were cycles of at most four moves. None of
+        the game engines enforced Stratego's official two-square repetition rule, so a deterministic
+        policy could shuffle indefinitely instead of choosing a winning alternative.
+  \item \emph{Optimisation churn and non-transitive cycling.} Keeping the learning rate fixed at
+        $3 \times 10^{-4}$ left the PPO clip fraction at 0.14 to 0.17 and per-update KL divergence
+        at 0.0131 to 0.0190 all the way to iteration 770. Combined with uniform snapshot sampling
+        and random eviction and no regularisation towards a slower anchor policy, the learner
+        cycled rather than settling: sampled wins against \texttt{expert} moved
+        $97.3\% \to 92.3\% \to 96.3\% \to 92.7\%$, and policy entropy swung from 1.216 (iteration
+        140) down to 0.838 (iteration 475), back up to 1.055 (iteration 650), and to 0.900--0.964
+        at iterations 700--770. Value explained variance stayed steady between 0.75 and 0.84.
+  \item \emph{An aggregate belief metric confounded by game length and setup priors.} Logged
+        belief-head accuracy floated between 0.360 and 0.410 and appeared to fall during aggressive
+        stretches (0.410 at iteration 445 when games averaged 322 plies, versus 0.360 at iteration
+        650 when games averaged 231 plies). Stratifying by ply and setup bank showed that per-ply
+        accuracy did improve over training---shorter games simply concentrated more decisions in
+        the opening, where fewer enemy pieces have moved or been captured---yet accuracy on
+        uniformly random setups at plies 0 to 40 remained below 20\%. The aggregate 38 to 40\%
+        figure therefore reflects setup priors (heuristic and structured placements) and late-game
+        elimination far more than early behavioural inference.
+\end{enumerate}
+
+\paragraph{Lesson.} Once fixed opponents approach saturation, aggregate win rates stop diagnosing
+the learner. Direct matches against frozen checkpoints, cycle audits of greedy draws, and
+ply-stratified auxiliary metrics expose cycling, missing rule constraints, and composition shifts
+that headline averages hide.
+
+% ------------------------------------------------------------------------------------------
+\section{Codebase audit fixes across the Rainbow learner, setup generator, and GUI}
+\label{sec:audit-fixes}
+
+\paragraph{Change.} A full audit of the training pipeline, setup generator, and desktop GUI
+uncovered six silent bugs; all six were fixed and locked down with unit tests:
+\begin{itemize}
+  \item \emph{Horizontal-flip corruption of directional battle-outlook planes}
+        (\texttt{network/drqn\_agent.py}). Mirror augmentation previously reflected columns
+        $c \mapsto 9 - c$ with \texttt{torch.flip} without swapping the directional battle-outlook
+        planes $34 \leftrightarrow 35$ ($P(\text{win})$ left/right) and $38 \leftrightarrow 39$
+        ($P(\text{lose})$ left/right), corrupting half of all demonstration and replay transitions
+        from \texttt{formal\_9} onwards. A helper (\texttt{\_flip\_state\_horizontal}) now reflects
+        columns and swaps both plane pairs whenever at least 41 planes are present, applied to
+        both \texttt{state} and \texttt{next\_state} in demonstration recording and replay storage.
+  \item \emph{PBRS breaking the ten-fold PER win boost} (\texttt{network/drqn\_agent.py}).
+        Winning transitions were previously detected by \texttt{reward\_clipped >= 0.8 and done}.
+        Under potential-based shaping \cite{NgPBRS}, a terminal transition subtracts
+        $\Phi(s_{\text{prev}})$, so dominant wins with $\Phi(s_{\text{prev}}) > 0.2$ fell below
+        0.8 and missed the ten-fold priority boost. Win detection now checks the unshaped game
+        outcome (\texttt{winner == self.player\_id}) whenever outcome metadata is passed, falling
+        back to the clipped-reward threshold only when no unshaped winner is available.
+  \item \emph{C51 atom entropy instead of action-policy regularisation}
+        (\texttt{network/drqn\_agent.py}). The optional entropy-regularisation, KL-regularisation,
+        and dynamic-damping terms previously computed entropy and KL over the 51 C51 return atoms
+        \cite{C51} (\texttt{dim=2}), which would push return distributions toward uniform rather
+        than regularising the policy. They now compute entropy and KL on the softmax policy over
+        expected Q-values (masked to legal moves when available); defaults remain disabled.
+  \item \emph{Empty full-length Scout ray in the original outlook code}
+        (\texttt{environment/battle\_outlook.py}). When a Scout on an edge looked down an empty
+        nine-square ray, the original outlook code read square $(0, 0)$ instead of sentinel index
+        100 (the three-position discrepancy noted in Section~\ref{sec:vec-engine}). Guarding empty
+        rays with \texttt{torch.where} brings it into exact agreement with \texttt{vec/engine.py},
+        and the cross-engine parity test now requires zero tolerated plane differences across all
+        59 planes.
+  \item \emph{Off-by-one piece groups in the heuristic setup}
+        (\texttt{environment/heuristic\_setup.py}). Hardcoded integer rank lists misclassified
+        several ranks (\texttt{[7, 8]} omitted Colonel $= 9$; \texttt{[5, 6]} shifted Captain and
+        Lieutenant; \texttt{[4]} duplicated Miner $= 4$ as Sergeant). Grouping now uses
+        \texttt{PieceType} enum members directly and places the exact 40-piece army without
+        duplication or omission.
+  \item \emph{Pygame GUI Expectamax utility, chance-node pruning, and policy-value support}
+        (\texttt{Python Stratego Game/dqn\_bot\_logic.py}). The Expectamax loss utility
+        $-0.5 - ((12 - r)/12) \cdot 0.5$ was inverted---penalising the loss of a Scout more than a
+        Marshal---and was corrected to $-0.5 - (r/12) \cdot 0.5$. The \texttt{top\_n = 3}
+        chance-node truncation (which discarded 52.5\% of probability mass under the default prior)
+        was removed so all ranks with positive probability (at most 12) are evaluated. In
+        addition, \texttt{DQNBotLogic} now auto-detects \texttt{PolicyValueNet} checkpoints
+        (59-plane encoding, legal-masked acting, value evaluation, multi-move recommendations, and
+        belief-head rank probabilities) alongside existing Rainbow checkpoints.
+\end{itemize}
+
+\paragraph{Why.} Auditing \texttt{formal\_14} verified that the horizontal-flip defect had a direct
+behavioural cost: because vertical outlook planes ($32, 33, 36, 37$) are invariant to horizontal
+mirroring while horizontal planes ($34, 35, 38, 39$) were inverted in 50\% of stored transitions,
+\texttt{formal\_14} committed sure-loss blunders on horizontal attacks at 5.7 times the vertical
+rate (2.32\% versus 0.41\%) and lost 33.1\% of horizontal attacks on revealed pieces versus 18.3\%
+vertically. The remaining five fixes eliminated silent failures in priority boosting, optional
+policy regularisers, setup generation, engine parity, and GUI search.
+
+\paragraph{Result.} Unit tests verify exact $10^{-6}$ agreement between
+\texttt{\_flip\_state\_horizontal} and freshly mirrored encoding across all 41 planes for both
+players, unshaped-winner priority boosting under large positive $\Phi$, action-policy entropy and
+dynamic damping, zero-tolerance 59-plane parity including all four edge Scout rays, exact 40-piece
+heuristic setups across 25 seeds for both sides, Expectamax loss ordering (Marshal $>$ Scout) with
+full 12-rank chance nodes, and bit-for-bit 59-plane parity for \texttt{PolicyValueNet} in the GUI
+adapter (231 passed, 0 failed across the full test suite, with one pre-existing documented xfail).
+Re-running \texttt{formal\_14} with the fixed Rainbow Q-learner was not measured, as active
+training has moved to the batched policy-gradient trainer; these fixes ensure the thesis codebase,
+setup generator, and desktop GUI are sound.
+
+\paragraph{Lesson.} Spatial data augmentation must transform every directional feature plane
+alongside the board axes and action indices, not merely flip coordinates. Comparing directional
+error rates (horizontal versus vertical blunders) provides a fast behavioural test for mirror
+augmentation bugs, and named enum members should always replace raw rank integers in game logic.
+
+% ------------------------------------------------------------------------------------------
+\section{Enforcing the official two-square repetition rule across all four engines}
+\label{sec:two-square}
+
+\paragraph{Change.} Stratego's two-square repetition rule (in the box-rule form; the ISF tournament
+rule allows one more move) was added identically across all
+four game engines (\texttt{vec/engine.py}, \texttt{environment/environment.py},
+\texttt{web/play.html}, and \texttt{Python Stratego Game/stratego.py}): if a player's previous two
+consecutive quiet moves reversed each other ($A \to B$, then $B \to A$), repeating $A \to B$ on
+that player's next turn is illegal and masked out of the legal-move set. Each side tracks its own
+last two quiet moves in its own coordinate frame; any battle or game reset clears both trackers,
+and any non-reversing move breaks the pattern. If the forbidden move is a player's only remaining
+legal move, that player loses by immobility (\texttt{no\_moves}), matching the official rules. The
+observation stays at 59 planes, keeping full checkpoint compatibility with \texttt{ppo\_2}. In the
+same pass, \texttt{\_is\_position\_repetitive()} in \texttt{environment/environment.py} was fixed
+to compare \texttt{recent\_moves[i]} with \texttt{recent\_moves[i - 2]} (the same player's
+previous move) rather than \texttt{i - 1} (the opponent's move).
+
+\paragraph{Why.} The \texttt{ppo\_2} draw audit (Section~\ref{sec:ppo2}): 59.5\% of greedy
+no-battle draws against the passive expert were pure two-square $A \leftrightarrow B$ cycles and
+83.8\% were cycles of at most four moves. Without the rule in the action mask, a deterministic
+greedy policy could cycle indefinitely into a 200-ply no-battle draw whenever a local back-and-forth
+move outscored attacking moves by a small margin. Implementing the rule in only a subset of engines
+would break cross-engine parity: adding it to the training environment immediately caused the GUI
+parity test to fail at ply 35 until \texttt{stratego.py} received the matching tracker.
+
+\paragraph{Result.} All four engines pass exact cross-engine replay parity tests
+(\texttt{test\_vec\_engine.py}, \texttt{test\_web\_engine.py}, and \texttt{test\_gui\_engine.py}),
+including unit tests for non-reversing resets, battle resets, trapped \texttt{no\_moves} losses,
+and Scout long-move masking without breaking slide continuation. To isolate the effect of the rule
+alone---without changing a single weight---the trained \texttt{ppo\_2} checkpoint
+(\texttt{runs/ppo\_2/net\_final.pt}) was re-evaluated on the upgraded batched engine across 300
+games per opponent on the diverse setup bank (seed 123):
+\begin{center}
+\small
+\begin{tabular}{lccc}
+\toprule
+Matchup (300 games, \texttt{ppo\_2} with two-square rule) & W / L / D & win rate & mean plies \\
+\midrule
+greedy vs \texttt{expert}  & 284 / 11 / 5  & 94.7\% & 183 \\
+greedy vs \texttt{expert2} & 237 / 40 / 23 & 79.0\% & 218 \\
+greedy vs \texttt{expert3} & 242 / 40 / 18 & 80.7\% & 208 \\
+sampled vs \texttt{expert}  & 285 / 13 / 2  & 95.0\% & 197 \\
+sampled vs \texttt{expert2} & 234 / 62 / 4  & 78.0\% & 205 \\
+sampled vs \texttt{expert3} & 235 / 62 / 3  & 78.3\% & 208 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Enforcing the two-square rule alone cut greedy no-battle draws against the passive \texttt{expert}
+from 45--82 per 300 games (Section~\ref{sec:ppo2}, 69.3--82.0\% wins at 215--257 plies) down to
+5 of 300 (94.7\% wins at 183 plies), closing the entire gap with sampled play (95.0\% wins, 2
+draws). Against both proactive experts, greedy play under the rule also matched or slightly
+outperformed sampled play in win rate while cutting losses from 62 to 40.
+
+\paragraph{Lesson.} Missing game-rule constraints show up most sharply under greedy evaluation,
+where stochastic tie-breaking no longer breaks illegal cycles. Enforcing a rule inside the shared
+action mask across every engine---and locking all implementations together with replay parity
+tests---both fixes evaluation artefacts immediately and prevents silent drift between training,
+browser play, and desktop GUI.
+
+% ------------------------------------------------------------------------------------------
+\section{Stabilising PPO self-play: unbiased bootstrap, cosine annealing, PFSP, and magnet KL (ppo\_3)}
+\label{sec:ppo3}
+
+\paragraph{Change.} Four algorithmic upgrades were made to the batched PPO trainer
+(\texttt{vec/ppo.py}), keeping the 59-plane, 64-channel, six-block \texttt{PolicyValueNet}
+architecture and checkpoint format backward-compatible with \texttt{ppo\_2}, together with a
+fixed-reference evaluation flag (\texttt{--eval-ref}):
+\begin{itemize}
+  \item \emph{Unbiased one-ply lookahead \texttt{side\_gae()} bootstrap.} At rollout truncation
+        ($t = T$), \texttt{side\_gae()} previously set the waiting side's bootstrap value to
+        $-v_{\text{last}}$, negating the moving side's value estimate. Because a draw pays $-0.5$
+        to both sides, $V_{\text{mover}} + V_{\text{other}} = -P(\text{draw}) \neq 0$, and against
+        asymmetric opponents (\texttt{random}, scripted experts, or weaker snapshots) negating the
+        network's valuation of the opponent's observation misestimates the learner's value. The
+        rollout now steps one extra lookahead ply at $s_T$: the side to move at $s_T$ bootstraps
+        from $V(s_T)$ when it is the learner, and after stepping ply $T$ the waiting side receives
+        either its exact terminal reward (\texttt{draw} or $-z_T$) if ply $T$ ended the game, or
+        $V(s_{T+1})$ evaluated from its own canonical view. When lookahead tensors are omitted,
+        \texttt{has\_boot} zeroes only the unbootstrapped final truncated decision without negating
+        $v_{\text{last}}$.
+  \item \emph{Cosine learning-rate annealing.} \texttt{cosine\_lr()} anneals the step size smoothly
+        from \texttt{--lr} to \texttt{--lr-end} over the run duration (\texttt{--hours}) or
+        iteration cap (\texttt{--max-iters}).
+  \item \emph{Prioritized Fictitious Self-Play (PFSP) league.} \texttt{League} now tracks
+        exponentially windowed per-slot learner W/L/D counts (window 200, draws counted as $0.5$)
+        and samples snapshot opponents proportionally to $(1 - \hat{w}_j)^p$
+        (\texttt{--pfsp-power}, default $2.0$) with Laplace smoothing ($\text{prior} = 1.0$) so
+        new snapshots are explored. The starting anchor (\texttt{nets[0]}) is protected; when full,
+        the league evicts the easiest (highest learner win-rate) non-anchor snapshot instead of
+        evicting at random.
+  \item \emph{Legal-masked magnet KL regularisation.} Inspired by Regularised Nash Dynamics
+        \cite{perolat2022stratego} and Magnetic Mirror Descent \cite{Ataraxos2025}, the policy loss
+        adds $\beta_{\text{KL}}\,\mathrm{KL}(\pi_\theta \,\|\, \pi_{\text{magnet}})$ computed
+        strictly over legal actions (\texttt{masked\_kl\_loss}, masking illegal logits to $-10^9$
+        in fp32 and zeroing illegal terms so both value and gradients are invariant to illegal
+        logits) against a frozen magnet copy refreshed every \texttt{--magnet-every} iterations
+        (default 40; skipped during value warm-up or when \texttt{--kl-coef 0}).
+  \item \emph{Fixed reference evaluation (\texttt{--eval-ref}).} Periodic evaluations play sampled
+        games ($T = 1.0$) against a fixed reference checkpoint to track head-to-head progress once
+        scripted experts saturate.
+\end{itemize}
+
+\paragraph{Why.} Section~\ref{sec:ppo2}: in \texttt{ppo\_2} a constant learning rate of
+$3 \times 10^{-4}$ left the PPO clip fraction at 0.14--0.17 and per-update KL at 0.0131--0.0190
+through iteration 770; uniform snapshot sampling and random eviction without a magnet anchor
+allowed non-transitive cycling in both policy entropy and win rate against the expert; and
+negating $v_{\text{last}}$ biased truncated rollouts whenever draw probabilities were non-zero or
+the opponent was not a symmetric self-play copy.
+
+\paragraph{Result.} Initialised from \texttt{runs/ppo\_2/net\_final.pt} on the upgraded engine with
+the two-square rule, \texttt{runs/ppo\_3} trained for 0.38 hours (24 minutes, stopping cleanly at
+iteration 64 with 6\,253\,818 learner decisions and four league snapshots) using 1\,024 parallel
+games, 128-ply rollouts, two epochs, minibatch 4\,096, cosine learning rate
+$1.5 \times 10^{-4} \to 2 \times 10^{-5}$, entropy weight 0.01, magnet KL weight
+$\beta_{\text{KL}} = 0.02$ refreshed every 40 iterations, PFSP power $p = 2.0$ (12-slot league,
+snapshot every 20 iterations), a two-iteration value-head warm-up, and opponent mix 45\% self-play,
+20\% three-style experts, 2\% random, and 33\% PFSP snapshots:
+\begin{center}
+\small
+\begin{tabular}{rccccccccr}
+\toprule
+Iter & samples & lr & kl & mkl & clip & entropy & ev & belief & nobattle / 5 it \\
+\midrule
+1  & 0.10\,M & $1.50 \times 10^{-4}$ & 0.0000 & 0.0000 & 0.00 & 1.062 & 0.73 & 0.283 & 0  \\
+10 & 0.98\,M & $1.46 \times 10^{-4}$ & 0.0078 & 0.0549 & 0.09 & 0.975 & 0.80 & 0.375 & 14 \\
+30 & 2.93\,M & $1.13 \times 10^{-4}$ & 0.0063 & 0.1270 & 0.07 & 0.951 & 0.84 & 0.381 & 17 \\
+40 & 3.91\,M & $7.02 \times 10^{-5}$ & 0.0040 & 0.1351 & 0.04 & 0.928 & 0.83 & 0.377 & 19 \\
+45 & 4.40\,M & $5.78 \times 10^{-5}$ & 0.0028 & 0.0165 & 0.03 & 0.922 & 0.82 & 0.375 & 20 \\
+60 & 5.86\,M & $2.72 \times 10^{-5}$ & 0.0016 & 0.0416 & 0.01 & 0.881 & 0.82 & 0.375 & 24 \\
+\bottomrule
+\end{tabular}
+\end{center}
+As the learning rate annealed, per-update KL fell monotonically after warm-up from 0.0078 to
+0.0016 and the clip fraction dropped from 0.09 to 0.01 (against 0.013--0.019 KL and 0.14--0.17
+clip throughout \texttt{ppo\_2}). Magnet KL (\texttt{mkl}) rose smoothly to 0.1351 at iteration
+40, reset to 0.0165 when the magnet refreshed at iteration 40, and reached 0.0416 by iteration 60.
+Policy entropy declined smoothly from 1.062 to 0.881 without the oscillations of \texttt{ppo\_2}.
+Under the two-square rule, training no-battle draws per five-iteration block fell to 2--24
+(\texttt{ppo\_2}: 17--94), while immobilisation (\texttt{nomove}) finishes rose to 276--316 after
+warm-up (\texttt{ppo\_2}: 118--247). In the in-run 300-game evaluations, sampled score against the
+fixed \texttt{--eval-ref} (\texttt{ppo\_2}) improved from 148 / 147 / 5 (49.3\% wins) at iteration
+30 to 176 / 120 / 4 (58.7\% wins) at iteration 60 (and 178 / 122 / 0 = 59.3\% against
+\texttt{start}), while greedy play against \texttt{expert} went 289 / 8 / 3 (96.3\%) at iteration
+30 and 288 / 9 / 3 (96.0\%) at iteration 60, and sampled play at iteration 60 reached
+248 / 49 / 3 (82.7\%) against \texttt{expert2} and 242 / 50 / 8 (80.7\%) against \texttt{expert3}.
+
+\paragraph{Head-to-head and original-environment evaluations.} Across 600-game head-to-head matches
+on the diverse setup bank (10\,000 setups, seed 123):
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Matchup (600 games, diverse setups) & temperature & W / L / D & win rate & score \\
+\midrule
+\texttt{ppo\_3} final (iter 64) vs \texttt{ppo\_2} final & $T = 1.0$ & 335 / 262 / 3  & 55.8\% & 56.1\% \\
+\texttt{ppo\_3} final (iter 64) vs \texttt{ppo\_2} final & $T = 0.0$ & 311 / 265 / 24 & 51.8\% & 53.8\% \\
+\texttt{ppo\_3} \texttt{net\_60} vs \texttt{ppo\_2} final & $T = 1.0$ & 307 / 288 / 5  & 51.2\% & 51.6\% \\
+\texttt{ppo\_3} \texttt{net\_60} vs \texttt{ppo\_2} final & $T = 0.0$ & 315 / 256 / 29 & 52.5\% & 54.9\% \\
+\texttt{ppo\_3} \texttt{net\_30} vs \texttt{ppo\_2} final & $T = 1.0$ & 316 / 279 / 5  & 52.7\% & 53.1\% \\
+\texttt{ppo\_3} final (iter 64) vs \texttt{ppo\_1} final & $T = 1.0$ & 493 / 102 / 5  & 82.2\% & 82.6\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+\texttt{ppo\_3/net\_final.pt} beat \texttt{ppo\_2/net\_final.pt} in both sampled play
+(335 / 262 / 3, 55.8\% wins, $z \approx 3.0$ on decisive games) and greedy play (311 / 265 / 24,
+51.8\% wins, 53.8\% score), and beat \texttt{ppo\_1} 493 / 102 / 5 (82.2\%, up from
+\texttt{ppo\_2}'s 481 / 102 / 17 = 80.2\%). No intermediate checkpoint outperformed
+\texttt{net\_final.pt} overall.
+
+In the original thesis environment (\texttt{vec/eval\_original.py}, 100 games per opponent across
+random, heuristic, smart heuristic, and outlook expert):
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Opponent (100 games each) & greedy W / L / D & greedy rev.\ lost & sampled W / L / D & sampled rev.\ lost \\
+\midrule
+random          & 100 / 0 / 0 & 23\% (66 / 293) & 100 / 0 / 0 & 26\% (75 / 287) \\
+heuristic       & 100 / 0 / 0 & 20\% (52 / 256) & 100 / 0 / 0 & 18\% (49 / 272) \\
+smart heuristic & 98 / 0 / 2  & 15\% (52 / 340) & 100 / 0 / 0 & 17\% (57 / 337) \\
+outlook expert  & 99 / 0 / 1  & 31\% (75 / 239) & 100 / 0 / 0 & 29\% (73 / 256) \\
+\midrule
+Total (400 games) & 397 / 0 / 3 (99.25\%) & 22\% (245 / 1128) & 400 / 0 / 0 (100.0\%) & 22\% (254 / 1152) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\texttt{ppo\_3} won 397 / 0 / 3 (99.25\%, zero losses) greedily and 400 / 0 / 0 (100.0\%) when
+sampled, improving on \texttt{ppo\_2}'s 393 / 0 / 7 greedy and 397 / 2 / 1 sampled records.
+
+\paragraph{Behavioural diagnosis and stratified belief audit.} Comparing \texttt{ppo\_3} and
+\texttt{ppo\_2} across 600 sampled games each in \texttt{vec/diagnose.py} (seed 0) shows how
+\texttt{ppo\_3} gained its edge and what it did not change. Against \texttt{expert}, \texttt{ppo\_3}
+went 577 / 20 / 3 versus \texttt{ppo\_2}'s 570 / 30 / 0 (both 16.1 attacks per game; hidden-moved
+attacks won 84\% of 7.3 per game versus 82\% of 7.2; hidden-unmoved won 58\% and lost 34\% of 6.5
+versus 59\% and 33\% of 6.5; revealed attacks won 71\% of 2.3 versus 73\% of 2.4; sure losses
+0.57 versus 0.53 per game, 0.10 by non-Scouts for both). Against the proactive \texttt{expert3},
+\texttt{ppo\_3} went 505 / 85 / 10 versus 484 / 114 / 2, cutting losses by 25\% (16.8 versus 16.3
+attacks per game; hidden-moved won 79\% for both; hidden-unmoved won 57\% and lost 33\% for both;
+non-Scout sure losses 0.09 versus 0.12 per game; Miners lost 2.37 versus 2.55 per game; Marshal
+lost 0.51 versus 0.56 per game). However, Bomb deaths of the highest pieces did not fall: against
+\texttt{expert}, the Marshal was lost 0.56 times per game (35\% into a Bomb, 33\% to the Spy)
+versus 0.57 in \texttt{ppo\_2} (32\% Bomb, 39\% Spy) and the General 0.47 times per game in both
+(37\% versus 33\% Bomb); against \texttt{expert3}, the Marshal Bomb share was 31\% for both and
+the General was lost 0.57 times per game in both (35\% versus 31\% Bomb).
+
+In the stratified belief-head check (200 sampled games per setup bank between \texttt{ppo\_3} and
+\texttt{ppo\_2}, scoring argmax accuracy on all hidden enemy squares of identical observations
+against the public rank-count argmax baseline):
+\begin{center}
+\small
+\begin{tabular}{lccc}
+\toprule
+Setup bank & ply 0 (\texttt{ppo\_3} / \texttt{ppo\_2} / public) & ply 40 (\texttt{ppo\_3} / \texttt{ppo\_2} / public) & ply 100 (\texttt{ppo\_3} / \texttt{ppo\_2} / public) \\
+\midrule
+heuristic  & 33.8\% / 33.8\% / 20.0\% & 34.8\% / 31.0\% / 20.5\% & 40.4\% / 36.1\% / 27.1\% \\
+structured & 26.6\% / 26.6\% / 20.0\% & 26.6\% / 25.7\% / 20.1\% & 30.1\% / 30.0\% / 24.9\% \\
+random     & 17.9\% / 17.9\% / 20.0\% & 20.9\% / 19.7\% / 19.8\% & 26.0\% / 25.7\% / 23.3\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+\texttt{ppo\_3} improved mid- and late-game belief accuracy over \texttt{ppo\_2} on heuristic
+setups ($+3.8$ percentage points at ply 40 and $+4.3$ at ply 100) and edged ahead at ply 40 on
+structured ($+0.9$) and random ($+1.2$) setups, while confirming Section~\ref{sec:ppo2}'s
+finding: on uniformly random setups at plies 0--40, both networks remain near the 20\% public-count
+baseline because early-game belief accuracy comes mainly from setup priors rather than move-pattern
+inference.
+
+As the verified winner across head-to-head and original-environment benchmarks,
+\texttt{runs/ppo\_3/net\_final.pt} was exported to \texttt{Modular Stratego/web/model.onnx} and
+\texttt{web/model.json} (maximum policy logit difference $9.2 \times 10^{-5}$ and value difference
+$1.4 \times 10^{-6}$ between ONNX and PyTorch; previous \texttt{ppo\_1} web model backed up in
+\texttt{runs/ppo\_3/web\_model\_prev/}), passing \texttt{test\_web\_engine.py} (2 passed in
+26.33\,s).
+
+\paragraph{Re-check on fresh seeds.} The head-to-head was replayed on two new setup banks
+(\texttt{diverse\_setup\_bank(10000, seed=7)} and \texttt{seed=8}, 1\,000 games each). Sampled,
+\texttt{ppo\_3} beat \texttt{ppo\_2} 553 / 441 / 6 and 581 / 412 / 7 (55.3\% and 58.1\% wins);
+greedy, 527 / 428 / 45 and 535 / 424 / 41 (54.9\% and 55.5\% score). The edge is real.
+\texttt{net\_60} scored 585 / 409 / 6 on seed 7, so the final checkpoint is not better than
+\texttt{net\_60}: the two are within noise, and the 51.2\% of \texttt{net\_60} above was one
+unlucky bank. Two cautions on what the gain means. First, \texttt{ppo\_3} trained under the
+two-square rule and \texttt{ppo\_2} did not, and no run changed one thing at a time, so the 55--58\%
+cannot be split between adapting to the rule and the four trainer changes. Second, the rule as
+implemented forbids the third move between two squares, which is the classic box-rule wording;
+the ISF tournament rule allows three moves and forbids the fourth.
+
+\paragraph{Lesson.} Once self-play has found the basic tactical patterns of a game, further gains
+come from damping optimisation churn rather than taking larger steps: cosine learning-rate
+annealing, an unbiased lookahead bootstrap, PFSP opponent prioritisation, and legal-masked magnet
+KL, together with training under the two-square rule, turned \texttt{ppo\_2}'s cycling into a
+55--58\% head-to-head advance in a tenth of the total training budget (6.25\,M additional
+decisions); which of these did the work is not yet separated. At the same time, component diagnostics show the
+trade-off honestly: stabilising model-free PPO tightened Miner conservation and reduced losses
+against proactive opponents, but did not reduce high-rank Bomb deaths or produce above-baseline
+rank inference on uniformly random setups before ply 40.
+
+% ------------------------------------------------------------------------------------------
+\section{Two more hours at a falling learning rate (ppo\_4)}
+\label{sec:ppo4}
+
+\paragraph{Change.} \texttt{runs/ppo\_4} continued \texttt{ppo\_3/net\_final.pt} for two hours
+with the \texttt{ppo\_3} settings unchanged (cosine learning rate $1.5\times10^{-4} \to
+2\times10^{-5}$, magnet KL 0.02 refreshed every 40 iterations, PFSP power 2, a 12-slot league with a
+snapshot every 25 iterations, \texttt{--eval-ref} \texttt{ppo\_3}, seed 4). It stopped at iteration
+350 after 34 million learner decisions. Training charts for all runs are drawn by
+\texttt{python -m vec.plot\_runs} into \texttt{runs/plots/ppo\_training.png}.
+
+\paragraph{Why.} \texttt{ppo\_3} was still rising against its reference when its 24 minutes ran
+out (49\% at iteration 30, 59\% at 60). The question was whether a longer schedule keeps the gain
+going or whether the network has reached what it can learn from its input.
+
+\paragraph{Result.} For the first 100 iterations \texttt{ppo\_4} sat at 49--52\% against
+\texttt{ppo\_3} (300 sampled games per evaluation), which looked like a plateau. It then rose
+steadily as the learning rate fell: 55\% at iteration 150, 58\% at 200, 60\% from 250 on. On two
+fresh setup banks (1\,000 games each) the final net beat \texttt{ppo\_3}:
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+\texttt{ppo\_4} vs \texttt{ppo\_3} & seed 7 & seed 8 \\
+\midrule
+sampled ($T=1$) & 601 / 385 / 14 (60.8\% score) & 603 / 390 / 7 (60.7\%) \\
+greedy ($T=0$)  & 556 / 400 / 44 (57.8\%)       & 554 / 401 / 45 (57.6\%) \\
+\bottomrule
+\end{tabular}
+\end{center}
+Against the scripted opponents it held or gained ground (\texttt{vec/diagnose.py}, 600 sampled
+games, seed 0): 574 / 23 / 3 against the original expert (\texttt{ppo\_3}: 577 / 20 / 3) and
+520 / 70 / 10 against the tuned \texttt{expert3} (\texttt{ppo\_3}: 505 / 85 / 10, 18\% fewer
+losses). In the original environment it won 398 of 400 greedy games with no losses. The Marshal was
+lost 0.47 times per game against the expert (\texttt{ppo\_3}: 0.56), but the share of Marshal and
+General losses that came from attacking a Bomb did not fall (32\% and 44\%). One habit got worse:
+attacks with a non-Scout on an enemy piece already revealed to beat it rose from 0.10 to 0.22 per
+game against the expert and from 0.09 to 0.16 against \texttt{expert3}, and attacks on revealed
+pieces lost 30\% of the time instead of 24\%. \texttt{ppo\_4} replaced \texttt{ppo\_3} in
+\texttt{web/model.onnx} (ONNX equal to PyTorch within $2\times10^{-5}$; \texttt{ppo\_3}'s export kept
+in \texttt{runs/ppo\_4/web\_model\_prev/}).
+
+\paragraph{Lesson.} A flat head-to-head early in a continuation run is not yet a plateau: here the
+gain arrived only once the learning rate had annealed, so a run should be judged at its end, on fresh
+seeds. Head-to-head strength and the expert scores also hide changes in specific habits; the
+per-piece diagnosis caught a doubled rate of attacks that a human would see as plain blunders, which
+is the kind of weakness an opponent who adapts would use.
+
+% ------------------------------------------------------------------------------------------
+\section{Measuring past the scripted opponents: a ladder, an exploiter, and a memory probe}
+\label{sec:phase-a}
+
+\paragraph{Change.} Once \texttt{ppo\_4} beat every scripted opponent, three measurements replaced
+them. (1) An Elo ladder (\texttt{vec/ladder.py}): a round robin of twelve players, 400 sampled games
+per pair over two setup banks, fitted with a Bradley--Terry model (draws as half a win, the original
+expert fixed at 1500) and 1\,000 bootstrap resamples for the intervals. (2) An exploiter test
+(\texttt{vec/exploit.py}): a fresh PPO learner, started from the clone, plays only against one
+frozen target for 45 minutes; how fast it learns to win measures how easy the target is to beat
+by adapting to it, which is what a human does. (3) A supervised memory probe
+(\texttt{vec/memory/}): 20\,000 games of \texttt{ppo\_4}, split by game, on which four belief
+models of equal size predicted the rank of every hidden enemy piece from the 59 planes alone, the
+59 planes plus hand-made history planes (times moved, approaches and retreats, battles), or the 59
+planes plus a learned per-piece memory over its last 24 events (the thesis's AAREN, or a GRU).
+
+\paragraph{Why.} Section~\ref{sec:ppo4}: the scripted experts no longer separate the networks, and
+the belief head had stayed near the same accuracy since \texttt{ppo\_1}. The working explanation
+was that the network lacks memory, which is what AAREN was meant to supply.
+
+\paragraph{Result.} \emph{Ladder.} The clone rates 1460, \texttt{ppo\_1} 1804, \texttt{ppo\_2}
+1980, \texttt{ppo\_3} 2026 and \texttt{ppo\_4} 2089, with 95\% intervals of about $\pm 20$ that
+do not overlap; the tuned experts rate about 1690--1700. The pairwise scores agree with the
+fresh-seed head-to-heads (\texttt{ppo\_4} against \texttt{ppo\_3}: 59.6\% here, 60.7\% in
+Section~\ref{sec:ppo4}).
+
+\emph{Exploiter.} Against the original expert the exploiter passed 50\% within four minutes and
+ended at 93--96\%, every win by capturing the Flag before the expert committed its strong pieces.
+Against \texttt{ppo\_4} it went from 2\% to 8\% in the same time and was still rising. Because the
+clone starts about 630 Elo below \texttt{ppo\_4} and almost never wins at first, this shows only that
+\texttt{ppo\_4} has no weakness simple enough to find from that level in 45 minutes, not that it has
+none.
+
+\emph{Memory probe.} On the test games:
+\begin{center}
+\small
+\begin{tabular}{lccc}
+\toprule
+Input & accuracy, all hidden pieces & moved pieces & AUC Marshal/General (moved) \\
+\midrule
+public rank counts only        & 23.3\% & 23.2\% & 0.687 \\
+59 planes                      & 31.6\% & 31.6\% & 0.888 \\
+59 planes + hand-made history  & 32.0\% & 34.8\% & 0.918 \\
+59 planes + AAREN memory       & 32.0\% & 35.6\% & 0.928 \\
+59 planes + GRU memory         & 32.0\% & 35.4\% & 0.927 \\
+\bottomrule
+\end{tabular}
+\end{center}
+History helps on pieces that have moved (three to four points), but those are about a sixth of the
+hidden pieces, so the overall gain is 0.4 points. For unmoved pieces, which is where the Bombs that
+kill the Marshal and General are, it adds nothing (AUC 0.743 with or without memory): an unmoved
+piece has no history. The three memory designs reach the same ceiling, and \texttt{ppo\_4}'s own
+belief head (31.4\%) matches a model trained for this alone, so the flat belief curve is a limit
+of the information in the observation, not a failure to learn. The probe reads only public
+information, and a leak could only have inflated a gain.
+
+\emph{The blunders of Section~\ref{sec:ppo4}.} Over 600 games against each expert, recording
+\texttt{ppo\_4}'s own value estimate before each move, attacks on a revealed piece that beats the
+attacker (non-Scouts) occurred 0.3--0.7 times per 1\,000 moves when its value was 0.5--0.8 and
+3.7--4.5 times when it was at least 0.8, and \texttt{ppo\_3} shows the same pattern at a lower
+level. They did not cluster near the 200-ply no-battle limit (none after 150 quiet plies), so they
+are not sacrifices to reset the draw clock. Games with such a blunder were won as often as games
+without (95\% against 95\% against the expert).
+
+\paragraph{Lesson.} Before building a module to supply missing information, measure how much of it
+there is: here the probe showed in an hour that move history adds almost nothing in these games,
+and that the real gap, unmoved Bombs, is one no memory can close. And a reward paid only for the
+result leaves the agent indifferent to material once it believes the game is won; against
+scripted opponents that costs nothing, but it is the kind of play a human notices and can turn
+around when the network's confidence is wrong.
 
 % ------------------------------------------------------------------------------------------
 \section{Engineering notes}
@@ -1158,8 +2405,33 @@ until the probe fails as the run does.
         configuration then gave the same numbers to three digits, which exposed it. A probe
         should assert that its targets are distributions (they sum to one) before trusting a
         negative result.
+  \item Two training runs and the probes shared one 6\,GB laptop GPU for part of the formal\_9 to
+        formal\_10 comparison; an episode then took 4 to 33\,s instead of about 2 to 4\,s. Runs on
+        one GPU are compared at equal episodes, and a run that only serves as a control is stopped
+        once its comparison point is reached.
+  \item The trainer's progress bar rewrites one line with carriage returns, so a log watcher that
+        filters lines sees one ever-growing line that matches everything. Watching the plain log for
+        the evaluation lines (or turning carriage returns into newlines first) avoids it.
+  \item The planned Rust version of the environment could not be built: this machine has no Rust
+        toolchain, and installing one is the owner's decision. The parts it would take over (the
+        environment step, the shaping, the observation and outlook planes, the scripted players)
+        are pure functions of the board and are covered by the tests that compare the Python and
+        browser engines, which a Rust port can reuse.
   \item A patch helper made tolerant of trailing whitespace also treated the end of a replaced
         block as optional whitespace, and so ate the indentation of the line that followed. Four
         source files no longer compiled. Compiling every edited file at once, before running any
         test, found all of them in one pass.
+  \item A nested rollout-completion helper (\texttt{record\_done} in \texttt{vec/ppo.py}) used
+        \texttt{ends += ...} on an outer tensor without \texttt{nonlocal ends}, making
+        \texttt{ends} local and raising \texttt{UnboundLocalError} the first time a game finished.
+        An 8-ply unit-test rollout never reached the end of a game (\texttt{if not done.any():
+        return}) and so passed. Replacing the rebinding with in-place \texttt{ends.add\_(...)} and
+        setting \texttt{max\_plies=6} in the smoke test so games terminate during rollout caught
+        the path on both initial training and checkpoint resume.
+  \item A forward helper in the GUI adapter (\texttt{\_pv\_forward} in \texttt{dqn\_bot\_logic.py})
+        returned a 2-tuple when \texttt{with\_belief=False} and a 3-tuple when
+        \texttt{with\_belief=True}, while evaluation and recommendation callers unpacked three
+        values unconditionally, failing whenever queried for the opponent side
+        (\texttt{player\_id != self.player\_id}). Helpers with optional outputs should return a
+        fixed tuple arity with \texttt{None} in unused slots.
 \end{itemize}
