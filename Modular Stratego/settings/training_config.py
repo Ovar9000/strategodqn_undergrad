@@ -12,8 +12,8 @@ NUM_LANES = 16
 NUM_ENVS = NUM_LANES      # LEGACY alias - always equals NUM_LANES (kept for compatibility)
 BATCH_SIZE = 128         # Fits 6GB VRAM
 GAMMA = 0.999           # Discount factor - EXTREMELY HIGH for 1500-step long-term flag capture planning in Phase 4
-MEMORY_SIZE = 75000      # Replay capacity (transitions), sized for 6GB VRAM
-LEARNING_RATE = 0.00003    # Reduced from 0.0001 for stable distributional RL
+MEMORY_SIZE = 150000      # Replay capacity (transitions), sized for 6GB VRAM
+LEARNING_RATE = 0.0001    # Reduced from 0.0001 for stable distributional RL
 
 # Network size (RainbowDQN backbone). Thesis runs used 64 channels, 6 residual blocks, 4 heads.
 NETWORK_CHANNELS = 64
@@ -21,14 +21,14 @@ RESNET_BLOCKS = 6
 ATTENTION_HEADS = 4
 ADVANTAGE_HIDDEN = 512    # Per-square advantage head width (shared by all 100 squares)
 
-# AAREN history embeddings as extra input planes (off in Phase A: the agent sees the 32
+# AAREN history embeddings as extra input planes (off in Phase A: the agent sees the 41
 # observation planes only). On: HISTORY_EMBEDDING_SIZE more planes for both agents.
 AAREN_ENABLED = False
 NUM_EPISODES = 1000000    # Effectively infinite - train until manually stopped
-SAVE_INTERVAL = 1000       # Save model/export agent every N episodes
+SAVE_INTERVAL = 500       # Save model/export agent every N episodes
 PLOT_INTERVAL = 500       # Save metrics plots every N episodes
 EVAL_INTERVAL = 500       # Evaluation games (curriculum gates) every N episodes
-REPLAY_UPDATE_INTERVAL = 8    # Train every 8 steps (balances data diversity vs update frequency)
+REPLAY_UPDATE_INTERVAL = 4    # Train every 8 steps (balances data diversity vs update frequency)
 # Asynchronous learner (network/training/async_learner.py): agent 1's updates run on a background
 # thread and CUDA stream while the loop acts and steps the games. The ratio of updates to moves
 # is the same; acting may lag the learner by up to ASYNC_MAX_LAG + 1 updates.
@@ -78,6 +78,12 @@ DRAW_REWARD = -0.5
 # target's width, and the network learned a fifth of it in 5000 episodes (Appendix C, revealed
 # pieces). The support (drqn_agent.V_MIN / V_MAX) is widened to match.
 POTENTIAL_WEIGHTS = (5.0, 0.0, 0.0, 0.0)
+# Mobility term of the potential: MOBILITY_WEIGHT * (g(own movable pieces) - g(enemy movable
+# pieces)), g(n) = log(1 + n) / log(34), concave, so the last movable pieces count most. A side
+# with no movable piece loses, and the linear material term priced the last Sergeant like the
+# first: formal_10 and formal_11 lost every game they lost to the random opponent that way
+# (Appendix C). Both counts are public (the enemy's through GameState.hidden_pool).
+MOBILITY_WEIGHT = 1.0
 
 # Warmup Period (must collect this many experiences before training starts)
 WARMUP_STEPS = 1000       # Reduced further for faster Phase 1 start
@@ -108,6 +114,10 @@ IMITATION_REWARD_BOOST = 1.5  # Multiply reward for imitation actions (encourage
 COLD_START_ENABLED = True
 COLD_START_GAMES = 100                 # ~37-39k transitions with the flip, ~3 min to play (measured)
 COLD_START_DEMO_CAPACITY = 60000       # transitions kept (uint8 states: ~6 KB each, on the GPU)
+# Who plays the demonstrations: 'heuristic' (the frozen HeuristicOpponent, formal_1 to formal_12)
+# or 'expert' (environment/expert.OutlookExpert, which beats the heuristic 79-11 in 100 games).
+# The cold start alone sets the agent's level (Appendix C), so the teacher matters.
+COLD_START_DEMONSTRATOR = 'expert'
 COLD_START_PRETRAIN_UPDATES = 5000     # DQfD pre-trained for 750k updates; ~9 min here (~107 ms each)
 COLD_START_DEMO_RATIO = 0.10           # share of each batch from the demonstrations ...
 COLD_START_DEMO_DECAY_EPISODES = 5000  # ... falling linearly to 0 by this episode (0: constant)
@@ -115,7 +125,12 @@ COLD_START_DEMO_DECAY_EPISODES = 5000  # ... falling linearly to 0 by this episo
 # the +-2 support; a winning attack is worth ~0.05 more than a losing one). DQfD used 0.8 with
 # rewards clipped to +-1 and lambda = 1.
 COLD_START_MARGIN = 0.1
-COLD_START_MARGIN_WEIGHT = 1.0
+COLD_START_MARGIN_WEIGHT = 0.0
+# Behaviour cloning on the demonstrations: cross-entropy of the demonstrated move over a softmax of
+# the legal moves' Q-values / COLD_START_BC_TEMP (0 weight: off). Penalises every competing legal
+# move at once, not only the best rival as the margin does.
+COLD_START_BC_WEIGHT = 1.0
+COLD_START_BC_TEMP = 0.25
 
 # Multi-Step Returns (N-Step DQN)
 N_STEPS = 5               # 5-step returns for deeper credit assignment in long-horizon games (200-500 moves)
@@ -216,6 +231,8 @@ PHASE_1_WIN_THRESHOLD_HEURISTIC = 0.50  # ... and vs heuristic
 PHASE_2_WIN_THRESHOLD = 0.55            # Phase 2 -> 3: vs heuristic (fog of war)
 PHASE_3_WIN_THRESHOLD = 0.70            # Phase 3 -> 4: vs heuristic (fog of war)
 EVAL_GAMES = 40                         # evaluation games per gate opponent
+# Opponents every evaluation also plays (not gates): 'random' always, plus these
+EVAL_EXTRA_OPPONENTS = ('expert',)
 
 # Phase Episode Limits: a phase ends after MAX training episodes even if its gates are not met
 # (0 = no cap: only the gates advance a stage). From formal_8 there is no cap. In formal_6 and

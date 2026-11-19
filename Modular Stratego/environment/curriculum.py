@@ -425,20 +425,20 @@ class CurriculumManager:
             # Track wins by opponent type (true_random counts as random for curriculum purposes)
             if opponent_type in ['random', 'true_random']:
                 metrics.wins_vs_random += 1
-            elif opponent_type in ['heuristic', 'greedy', 'frozen_heuristic', 'smart_heuristic']:
+            elif opponent_type in ['heuristic', 'greedy', 'frozen_heuristic', 'smart_heuristic', 'expert']:
                 metrics.wins_vs_heuristic += 1
         elif winner == -1:  # Agent1 loses / Agent2 wins
             metrics.total_losses += 1
             
             if opponent_type in ['random', 'true_random']:
                 metrics.losses_vs_random += 1
-            elif opponent_type in ['heuristic', 'greedy', 'frozen_heuristic', 'smart_heuristic']:
+            elif opponent_type in ['heuristic', 'greedy', 'frozen_heuristic', 'smart_heuristic', 'expert']:
                 metrics.losses_vs_heuristic += 1
                 
         # Track games played by opponent type
         if opponent_type in ['random', 'true_random']:
             metrics.games_vs_random += 1
-        elif opponent_type in ['heuristic', 'greedy', 'frozen_heuristic', 'smart_heuristic']:
+        elif opponent_type in ['heuristic', 'greedy', 'frozen_heuristic', 'smart_heuristic', 'expert']:
             metrics.games_vs_heuristic += 1
 
         # Per-opponent PFSP tracking

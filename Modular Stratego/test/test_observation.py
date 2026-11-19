@@ -15,7 +15,8 @@ from network.drqn_agent import RainbowAgent
 from environment import StrategoEnvironment
 from environment.piece import PieceType
 
-NUM_PLANES = 32
+from environment.observation import NUM_OBS_PLANES as NUM_PLANES, CH_OUTLOOK, encode_observation
+from vec.engine import encode as vec_encode, tables as vec_tables
 OWN, ENEMY_KNOWN, ENEMY_HIDDEN, LAKE, OWN_REVEALED, OBSERVABILITY, NO_BATTLE, PROGRESS = 0, 12, 24, 25, 26, 27, 28, 29
 MOVED, LONG_MOVED = 30, 31
 
@@ -203,3 +204,52 @@ def test_hidden_enemy_pieces_that_have_moved_are_marked(cpu, tiny_network):
             seen_long += int(x[LONG_MOVED].sum())
             assert (x[MOVED] <= x[ENEMY_HIDDEN]).all() and (x[LONG_MOVED] <= x[MOVED]).all()
     assert seen_moved > 0 and seen_long > 0
+
+
+def test_edge_scout_empty_full_ray_does_not_read_square_zero(cpu):
+    """Regression for battle_outlook.py: when a Scout sits on a board edge looking across 9
+    completely empty squares, the ray must hit sentinel 100 (zeros), NOT square (0, 0)."""
+    # Test both an enemy Flag (Scout would falsely see P(win)=1) and an enemy Marshal (P(lose)=1)
+    # placed at square (0, 0).
+    for enemy_rank, expect_win, expect_lose in (
+        (PieceType.FLAG, 1.0, 0.0),
+        (PieceType.MARSHAL, 0.0, 1.0),
+    ):
+        board = torch.zeros(10, 10, dtype=torch.int8)
+        board[0, 0] = -enemy_rank.value
+        # Four edge Scouts whose full 9-square rays are completely empty (no pieces, no lakes):
+        #   (6, 0) looking RIGHT (dir 3) across row 6 cols 1..9
+        #   (7, 9) looking LEFT  (dir 2) across row 7 cols 8..0
+        #   (9, 5) looking UP    (dir 0) across col 5 rows 8..0
+        #   (0, 8) looking DOWN  (dir 1) across col 8 rows 1..9
+        board[6, 0] = PieceType.SCOUT.value
+        board[7, 9] = PieceType.SCOUT.value
+        board[9, 5] = PieceType.SCOUT.value
+        board[0, 8] = PieceType.SCOUT.value
+
+        obs = encode_observation(board, 1, device=cpu)
+        for (r, c), d in (((6, 0), 3), ((7, 9), 2), ((9, 5), 0), ((0, 8), 1)):
+            assert float(obs[CH_OUTLOOK + d, r, c]) == 0.0, f"Scout at {(r, c)} dir {d} falsely read P(win) from (0,0)"
+            assert float(obs[CH_OUTLOOK + 4 + d, r, c]) == 0.0, f"Scout at {(r, c)} dir {d} falsely read P(lose) from (0,0)"
+
+        # Verify exact parity with VecStratego's encoder (which always includes the standard lakes)
+        board_with_lakes = board.clone()
+        for lr, lc in ((4, 2), (4, 3), (5, 2), (5, 3), (4, 6), (4, 7), (5, 6), (5, 7)):
+            board_with_lakes[lr, lc] = LAKE_SQUARE
+        obs_lakes = encode_observation(board_with_lakes, 1, device=cpu)
+        own = (board_with_lakes.clamp_min(0)).long().view(1, 100)
+        opp = torch.where((board_with_lakes < 0) & (board_with_lakes != LAKE_SQUARE),
+                          -board_with_lakes, torch.zeros_like(board_with_lakes)).long().view(1, 100)
+        z_bool = torch.zeros(1, 100, dtype=torch.bool)
+        z_long = torch.zeros(1, dtype=torch.long)
+        vec_obs, _ = vec_encode(own, opp, z_bool, opp > 0, z_bool, z_bool, z_long, z_long, 0, 0, vec_tables(cpu))
+        assert torch.allclose(obs_lakes[CH_OUTLOOK:CH_OUTLOOK + 9], vec_obs[0, CH_OUTLOOK:CH_OUTLOOK + 9], atol=1e-6)
+
+        # Conversely, a Scout at (0, 9) looking LEFT (dir 2) along an unobstructed row 0 MUST still
+        # see the real enemy piece at square (0, 0).
+        hit_board = torch.zeros(10, 10, dtype=torch.int8)
+        hit_board[0, 0] = -enemy_rank.value
+        hit_board[0, 9] = PieceType.SCOUT.value
+        hit_obs = encode_observation(hit_board, 1, device=cpu)
+        assert float(hit_obs[CH_OUTLOOK + 2, 0, 9]) == expect_win
+        assert float(hit_obs[CH_OUTLOOK + 4 + 2, 0, 9]) == expect_lose

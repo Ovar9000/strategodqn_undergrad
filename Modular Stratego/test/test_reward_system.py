@@ -84,8 +84,9 @@ def test_pbrs_negative_for_loss():
 
 # ---------------------------------------------------------------- potential from the own view
 
-def test_hidden_enemy_pieces_count_with_the_mean_army_rank():
+def test_hidden_enemy_pieces_count_with_the_mean_army_rank(config_override):
     """The thesis potential skipped HIDDEN squares, so a fogged enemy army had no material."""
+    config_override(MOBILITY_WEIGHT=0.0)  # the material term alone
     with_piece = make_board({(6, 0): CAPTAIN, (2, 0): HIDDEN, (0, 5): HIDDEN})
     captured = make_board({(6, 0): CAPTAIN, (0, 5): HIDDEN})
     gain = compute_potential(captured, 1) - compute_potential(with_piece, 1)
@@ -93,8 +94,9 @@ def test_hidden_enemy_pieces_count_with_the_mean_army_rank():
     assert gain == pytest.approx(POTENTIAL_WEIGHTS[0] * UNKNOWN_PIECE_RANK / ARMY_MATERIAL)
 
 
-def test_hidden_markers_are_enemy_pieces_for_player_two_as_well():
+def test_hidden_markers_are_enemy_pieces_for_player_two_as_well(config_override):
     """Player 2's view also shows Player 1's unseen pieces as HIDDEN (a negative value)."""
+    config_override(MOBILITY_WEIGHT=0.0)  # the material term alone
     view = make_board({(3, 0): -CAPTAIN, (7, 0): HIDDEN, (9, 9): HIDDEN})
     without = make_board({(3, 0): -CAPTAIN, (9, 9): HIDDEN})
     assert compute_potential(without, -1) - compute_potential(view, -1) == pytest.approx(
@@ -231,8 +233,51 @@ def test_c51_support():
     """C51 support range in agent: it covers every return (outcome + telescoped shaping)."""
     from network.drqn_agent import V_MIN, V_MAX, NUM_ATOMS
     from network.training.transitions import outcome_reward
-    assert V_MIN == -6.0 and V_MAX == 6.0 and NUM_ATOMS == 51
-    assert abs((V_MAX - V_MIN) / (NUM_ATOMS - 1) - 0.24) < 0.001
+    assert V_MIN == -7.0 and V_MAX == 7.0 and NUM_ATOMS == 51
+    assert abs((V_MAX - V_MIN) / (NUM_ATOMS - 1) - 0.28) < 0.001
     phi_min, phi_max = potential_range()
     for winner in (1, -1, 0):
         assert V_MIN <= outcome_reward(winner, 1) - phi_max and outcome_reward(winner, 1) - phi_min <= V_MAX
+
+
+def test_with_the_hidden_pool_a_reveal_leaves_the_potential_unchanged(cpu, config_override):
+    """GameState.hidden_pool makes the enemy material exact: a Scout lost to a hidden Bomb lowers
+    the material term by the Scout's value only. (With the mean-rank estimate the revealed Bomb,
+    material 0, raised it by 3.7 more than the Scout cost.)"""
+    from environment import StrategoEnvironment
+    from environment.piece import PieceType as P
+    from network.distributional_reward import PIECE_RANKS
+    config_override(MOBILITY_WEIGHT=0.0)  # the material term alone
+    env = StrategoEnvironment(cpu)
+    env.board.reset()
+    env._flag_positions = {1: None, -1: None}
+    env.place_pieces(1, [(P.FLAG, (9, 0)), (P.SCOUT, (6, 4)), (P.MINER, (9, 9))])
+    env.place_pieces(-1, [(P.FLAG, (0, 9)), (P.BOMB, (5, 4)), (P.MINER, (0, 0))])
+    env.current_player = 1
+    before = env.get_state()
+    assert before.hidden_pool[P.BOMB.value - 1] == 1
+    env.step(((6, 4), (5, 4)))   # the Scout attacks the Bomb and is removed; the Bomb is revealed
+    env.step(((0, 0), (1, 0)))   # the enemy's reply
+    after = env.get_state()
+    w = POTENTIAL_WEIGHTS[0]
+    phi = lambda s: compute_potential(s.board, 1, s.hidden_pool)
+    expected = -w * PIECE_RANKS[P.SCOUT] / ARMY_MATERIAL
+    if POTENTIAL_WEIGHTS[1:] == (0.0, 0.0, 0.0):
+        assert phi(after) - phi(before) == pytest.approx(expected)
+    # the estimate without the pool rewarded the same exchange
+    est = compute_potential(after.board, 1) - compute_potential(before.board, 1)
+    assert est > expected
+
+
+def test_the_mobility_term_prices_the_last_movable_pieces_highest(config_override):
+    """MOBILITY_WEIGHT * (g(own movable) - g(enemy movable)), g concave: losing the last movable
+    piece lowers the potential by more than losing one of many."""
+    from network import distributional_reward as R
+    config_override(MOBILITY_WEIGHT=1.0, POTENTIAL_WEIGHTS=(0.0, 0.0, 0.0, 0.0))
+    many = {(6, c): SCOUT for c in range(10)}
+    bombs = {(9, 0): PieceType.BOMB.value, (9, 1): PieceType.FLAG.value, (0, 5): -SCOUT}
+    one_of_many = compute_potential(make_board({**bombs, **many}), 1) -         compute_potential(make_board({**bombs, **{k: v for k, v in many.items() if k != (6, 0)}}), 1)
+    last = compute_potential(make_board({**bombs, (6, 0): SCOUT}), 1) - compute_potential(make_board(bombs), 1)
+    assert last == pytest.approx(R._mobility(1)) and last > 5 * one_of_many > 0
+    lo, hi = potential_range()
+    assert lo == -1.0 and hi == 1.0

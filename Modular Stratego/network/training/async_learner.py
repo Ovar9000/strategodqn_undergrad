@@ -129,7 +129,7 @@ class AsyncLearner:
                     if stream is not None:
                         stream.synchronize()
                 # Diagnostics the loop reads: plain floats, not tensors of this stream
-                for name in ('_cached_dqn_grad_norm', '_cached_aaren_grad_norm', '_last_margin_loss'):
+                for name in ('_cached_dqn_grad_norm', '_cached_aaren_grad_norm', '_last_margin_loss', '_last_bc_loss'):
                     value = getattr(agent, name, None)
                     if isinstance(value, torch.Tensor):
                         setattr(agent, name, float(value))

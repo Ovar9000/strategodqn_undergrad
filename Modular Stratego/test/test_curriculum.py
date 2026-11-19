@@ -273,7 +273,7 @@ def test_trainer_evaluates_and_moves_through_the_phases(tmp_path, config_overrid
     monkeypatch.setattr(CurriculumManager, 'record_evaluation', record)
     run_tiny_training(tmp_path, config_override, monkeypatch, episodes=12,
                       EVAL_INTERVAL=4, EVAL_GAMES=1, PHASE_1_MAX_EPISODES=4, PHASE_2_MAX_EPISODES=4)
-    assert evaluations and set(evaluations[0][1]) == {'random', 'heuristic'}
+    assert evaluations and set(evaluations[0][1]) == {'random', 'heuristic', 'expert'}
     state = json.load(open(tmp_path / 'models' / 'curriculum_state.json'))
     assert state['current_phase'] >= 2
 
@@ -375,3 +375,109 @@ def test_later_stages_keep_the_stage_one_opponents(tmp_path):
         assert {'random', 'heuristic'} <= set(weights)
         assert weights['random'] >= 0.15 - 1e-9
         assert sum(weights.values()) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------- heuristic setup & GUI bot logic
+
+def test_heuristic_setup_places_all_40_pieces_with_correct_groups():
+    """smart_heuristic_setup must partition all 40 Stratego pieces with no duplicates or omissions,
+    and place Colonels/Majors (not Captains) in the protected back rows."""
+    from environment.heuristic_setup import smart_heuristic_setup
+    from vec.compat import all_pieces
+
+    army = all_pieces()
+    expected_counts = Counter(army)
+    colonel_in_back = 0
+    colonel_total = 0
+
+    for seed in range(25):
+        random.seed(seed)
+        for player_id, rows, back_rows in ((1, range(6, 10), {8, 9}), (-1, range(0, 4), {0, 1})):
+            valid_pos = [(r, c) for r in rows for c in range(10)]
+            placement = smart_heuristic_setup(list(army), valid_pos, player_id)
+            assert len(placement) == 40
+            positions = [pos for _, pos in placement]
+            assert len(set(positions)) == 40
+            assert set(positions) == set(valid_pos)
+            assert Counter(p for p, _ in placement) == expected_counts
+            for p, (r, _) in placement:
+                if p == P.COLONEL:
+                    colonel_total += 1
+                    colonel_in_back += int(r in back_rows)
+    # Colonels are explicitly placed in back rows (2 rows of 10 = 20 spots >= 18 placed before step 8)
+    assert colonel_in_back == colonel_total
+
+
+def test_gui_expectamax_utility_full_chance_node_and_policy_value_net(tmp_path):
+    """GUI Expectamax: losing higher-rank pieces must hurt more than losing Scouts, chance nodes
+    must evaluate all positive-probability ranks (no top-3 pruning), and DQNBotLogic auto-detects
+    PolicyValueNet checkpoints."""
+    import dqn_bot_logic as D
+    import stratego as S
+    from network.history_aggregator import HistoryAggregator
+    from vec.net import PolicyValueNet, save as save_pv
+
+    class StubAgent:
+        device = torch.device('cpu')
+        history = None
+
+    search = D.ExpectamaxSearch(StubAgent(), max_depth=1, max_time=10.0)
+    # 1. Loss utility: losing General hurts more than losing Scout
+    loss_scout = search._calculate_outcome_utility(P.SCOUT, P.MARSHAL)
+    loss_general = search._calculate_outcome_utility(P.GENERAL, P.MARSHAL)
+    assert loss_general < loss_scout
+    assert loss_scout == pytest.approx(-0.5 - (P.SCOUT.value / 12.0) * 0.5)
+    assert loss_general == pytest.approx(-0.5 - (P.GENERAL.value / 12.0) * 0.5)
+
+    # 2. Chance node evaluates ALL positive-probability ranks (12 on default prior, not top-3)
+    b = S.Board()
+    b.set((5, 0), S.Piece(owner=2, rank=6))  # Captain
+    b.set((6, 0), S.Piece(owner=1, rank=2, revealed=False))  # unrevealed enemy
+    seen_ranks = []
+    orig_combat = search._simulate_combat
+
+    def spy_combat(board, move, attacker_rank, defender_rank):
+        seen_ranks.append(defender_rank)
+        return orig_combat(board, move, attacker_rank, defender_rank)
+
+    search._simulate_combat = spy_combat
+
+    class DummyAdapter:
+        def get_state_evaluation(self, board, player_id):
+            return 0.0
+
+    import time
+    search._expectamax_recursive(b, ((5, 0), (6, 0)), player=2, depth=1, start_time=time.time(),
+                                 prior_q=0.0, DQN_adapter=DummyAdapter())
+    expected_nonzero = {pt for pt, p in HistoryAggregator.get_default_piece_prior().items() if p > 0}
+    assert len(expected_nonzero) == 12
+    assert set(seen_ranks) == expected_nonzero
+
+    # 3. DQNBotLogic auto-detects a PolicyValueNet checkpoint and plays legally without leaking hidden pieces
+    pv_path = str(tmp_path / 'pv_test.pt')
+    save_pv(PolicyValueNet(channels=8, blocks=1, in_planes=59), pv_path)
+    bot = D.DQNBotLogic(pv_path, player_id=2, device='cpu')
+    assert bot.pv_net is not None and bot.agent is None
+    random.seed(0)
+    full = S.Board()
+    S.auto_setup(full, 1)
+    S.auto_setup(full, 2)
+    obs = bot._get_state_representation(full, 2)
+    assert obs.shape == (59, 10, 10)
+    move = bot.choose_move(full, 2)
+    assert move in bot._get_gui_legal_moves(full, 2)
+    val = bot.get_state_evaluation(full, 2)
+    assert -1.0 <= val <= 1.0
+    recs = bot.get_multi_recommendations(full, 2, top_n=3)
+    assert len(recs) == 3 and recs[0]['label'] == 'Best'
+    probs = bot.get_rank_probabilities((6, 0))
+    assert probs is not None and sum(probs.values()) > 0.5
+    # Regression: evaluating & recommending for the OTHER side (player_id != bot.player_id) must work cleanly
+    opp_val = bot.get_state_evaluation(full, 1)
+    assert -1.0 <= opp_val <= 1.0
+    opp_recs = bot.get_multi_recommendations(full, 1, top_n=3)
+    assert len(opp_recs) == 3 and opp_recs[0]['label'] == 'Best'
+    assert all(r['move'] in bot._get_gui_legal_moves(full, 1) for r in opp_recs)
+    opp_move = bot.get_move_recommendation(full, 1)
+    assert opp_move in bot._get_gui_legal_moves(full, 1)
+    assert bot._last_moves[1] is None  # recommendation must not overwrite last-move history

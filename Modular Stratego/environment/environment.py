@@ -53,6 +53,7 @@ class StrategoEnvironment:
         self.max_turns = max_turns  # Curriculum-based turn limit
         self.no_battle_draw_plies = no_battle_draw_plies  # Draw after this many plies without a battle (0 = off)
         self.plies_since_battle = 0
+        self._rep_moves: Dict[int, List[Tuple[Tuple[int, int], Tuple[int, int]]]] = {1: [], -1: []}
         self._own_revealed_cache = (None, None)
         self._moves_cache_key = None
         self._moves_cache = []
@@ -89,6 +90,8 @@ class StrategoEnvironment:
         self.win_type = None  # Reset win type tracking
         self.turn_count = 0
         self.plies_since_battle = 0
+        self._rep_moves = {1: [], -1: []}
+        self._moves_cache_key = None
         self.move_history = []
         self.revealed_pieces_p1 = {}
         self.revealed_pieces_p2 = {}
@@ -197,17 +200,33 @@ class StrategoEnvironment:
         random.shuffle(positions)
         return positions
 
+    def _forbidden_two_square_move(self, player: int) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+        """Official two-square rule: if `player`'s previous two quiet moves were A->B then B->A,
+        repeating A->B on the third consecutive turn is illegal."""
+        hist = self._rep_moves[player]
+        if len(hist) == 2:
+            (s2, d2), (s1, d1) = hist
+            if s2 == d1 and d2 == s1:
+                return (d1, s1)
+        return None
+
     def get_valid_moves(self) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
         """
-        Get all valid moves for the current player (Scouts slide any distance).
-        Cached on the board contents and side to move, so repeated calls within a ply are free
-        and a board edited from outside the environment is never served stale moves.
+        Get all valid moves for the current player (Scouts slide any distance; two-square
+        repetition is excluded).
+        Cached on the board contents, side to move, and any forbidden two-square move, so repeated
+        calls within a ply are free and a board edited from outside the environment is never served
+        stale moves.
         """
         flat = self.board.actual_board.flatten().tolist()
-        key = (self.current_player, tuple(flat))
+        forbidden = self._forbidden_two_square_move(self.current_player)
+        key = (self.current_player, forbidden, tuple(flat))
         if key != self._moves_cache_key:
             self._moves_cache_key = key
-            self._moves_cache = legal_moves(flat, self.current_player)
+            moves = legal_moves(flat, self.current_player)
+            if forbidden is not None:
+                moves = [m for m in moves if m != forbidden]
+            self._moves_cache = moves
         return list(self._moves_cache)
 
     def step(self, action: Tuple[Tuple[int, int], Tuple[int, int]]) -> Tuple[GameState, float, bool, Dict]:
@@ -257,6 +276,7 @@ class StrategoEnvironment:
         if target_piece_value != EMPTY_SQUARE and target_piece_value != LAKE_SQUARE:
             # Battle occurs
             self.plies_since_battle = 0
+            self._rep_moves = {1: [], -1: []}
             attacker_type = PieceType(abs(moving_piece_value))
             defender_type = PieceType(abs(target_piece_value))
             
@@ -343,6 +363,10 @@ class StrategoEnvironment:
             self.board.move_piece(self.current_player, (r_from, c_from), (r_to, c_to))
             self._track_move((r_from, c_from), (r_to, c_to), long_move)
             self.plies_since_battle += 1
+            hist = self._rep_moves[self.current_player]
+            hist.append(((int(r_from), int(c_from)), (int(r_to), int(c_to))))
+            if len(hist) > 2:
+                del hist[:-2]
 
         self.turn_count += 1
         self.move_history.append(action)
@@ -457,16 +481,16 @@ class StrategoEnvironment:
         # Check if the same position has occurred multiple times (aggressive detection)
         if len(self.move_history) < 6:
             return False
-        # Check last 6 moves for back-and-forth patterns (deadlock)
+        # Check last 6 plies for same-player back-and-forth reversals (compare i with i-2)
         recent_moves = self.move_history[-6:]
         reversal_count = 0
-        for i in range(1, len(recent_moves)):
+        for i in range(2, len(recent_moves)):
             current_move = recent_moves[i]
-            previous_move = recent_moves[i-1]
-            if (current_move[0] == previous_move[1] and 
+            previous_move = recent_moves[i - 2]
+            if (current_move[0] == previous_move[1] and
                 current_move[1] == previous_move[0]):
                 reversal_count += 1
-        return reversal_count >= 2  # 2 reversals in 6 moves = deadlock
+        return reversal_count >= 2  # 2 same-player reversals in 6 plies = deadlock
 
     def _is_stalemate(self):
         # Check if very few pieces are moving
@@ -522,6 +546,9 @@ class StrategoEnvironment:
             own = (actual * p - 1).to(torch.uint8) < 12  # 1 <= value * p <= 12 (wraps below 1)
             self._own_revealed_cache = (key, own & (enemy_view == actual))
         own_revealed = self._own_revealed_cache[1]
+        # Rank counts of the enemy pieces this view hides (public: captured pieces were revealed)
+        hidden_ranks = actual[board == HIDDEN_PIECE].abs().long().clamp(0, 12)
+        hidden_pool = torch.bincount(hidden_ranks, minlength=13)[1:13].float()
 
         game_state = GameState(
             board=board,
@@ -532,6 +559,7 @@ class StrategoEnvironment:
             max_turns=self.max_turns,
             observability=float(min(max(observability, 0.0), 1.0)),
             own_revealed=own_revealed,
+            hidden_pool=hidden_pool,
             moved=self.moved.clone(),
             long_moved=self.long_moved.clone(),
             game_over=self.game_over,

@@ -28,6 +28,9 @@ class GameState:
     # move of more than one square (only a Scout can), which either player can see
     moved: Optional[torch.Tensor] = None
     long_moved: Optional[torch.Tensor] = None
+    # (12,) rank counts (index PieceType value - 1) of the enemy pieces hidden from the player to
+    # move: public, since every captured piece was revealed in its battle (battle_outlook.py)
+    hidden_pool: Optional[torch.Tensor] = None
 
     def get_player_view(self, player: int) -> torch.Tensor:
         """Returns the board as seen by the specified player."""
@@ -77,5 +80,6 @@ class GameState:
             observability=self.observability,
             own_revealed=self.own_revealed.clone() if self.own_revealed is not None else None,
             moved=self.moved.clone() if self.moved is not None else None,
-            long_moved=self.long_moved.clone() if self.long_moved is not None else None
+            long_moved=self.long_moved.clone() if self.long_moved is not None else None,
+            hidden_pool=self.hidden_pool.clone() if self.hidden_pool is not None else None
         )

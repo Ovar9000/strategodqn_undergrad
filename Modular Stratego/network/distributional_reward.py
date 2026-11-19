@@ -24,7 +24,13 @@ from dataclasses import dataclass
 from environment.piece import PieceType
 from environment.game_state import GameState
 from environment.board import HIDDEN_PIECE
+import math
+
 from settings.training_config import GAMMA, POTENTIAL_WEIGHTS
+try:
+    from settings.training_config import MOBILITY_WEIGHT
+except ImportError:
+    MOBILITY_WEIGHT = 0.0
 
 # Piece rank values for reward calculations (1-10 scale)
 PIECE_RANKS = {
@@ -57,16 +63,26 @@ UNKNOWN_PIECE_RANK = ARMY_MATERIAL / sum(ARMY.values())                 # 3.7
 # Marshal(10), General(9), Colonel(8) should NOT rush forward.
 OFFENSIVE_RANK_THRESHOLD = 6  # Captain and below
 _RANK_BY_VALUE = {pt.value: PIECE_RANKS.get(pt, 0) for pt in PieceType}
+_IMMOBILE_VALUES = (PieceType.FLAG.value, PieceType.BOMB.value)
+MOVABLE_PIECES = sum(n for t, n in ARMY.items() if t not in (PieceType.FLAG, PieceType.BOMB))  # 33
+MOVABLE_SHARE = MOVABLE_PIECES / sum(ARMY.values())  # a hidden piece without the pool: 33/40 movable
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # POTENTIAL FUNCTION — Φ(s): game-progress potential for PBRS
 # ═══════════════════════════════════════════════════════════════════════
 
-def compute_potential(board: torch.Tensor, player_id: int) -> float:
+def compute_potential(board: torch.Tensor, player_id: int, hidden_pool=None) -> float:
     """
     Game-progress potential Φ(s) of `board` as `player_id` sees it (its own view: enemy pieces it
     cannot see are HIDDEN_PIECE; a fully observable board shows every rank).
+
+    hidden_pool: the rank counts (12,) of the enemy pieces the view hides (GameState.hidden_pool),
+    which are public, since every captured piece was revealed in its battle. With it the enemy's
+    material is exact and a reveal leaves Φ unchanged; only captures move it. Without it (a bare
+    board) a hidden piece counts as UNKNOWN_PIECE_RANK. That estimate made reveals move Φ: a Bomb
+    or the Flag (material 0) found by a lost attack raised Φ by 3.7, more than a Scout (2) or a
+    Miner (3) is worth, so attacking unmoved pieces with cheap ones was rewarded.
 
     Higher Φ ⟹ closer to winning.  Components (weights POTENTIAL_WEIGHTS, in this order):
       1. Material advantage: own − enemy rank-weighted material over a full army's material;
@@ -84,13 +100,22 @@ def compute_potential(board: torch.Tensor, player_id: int) -> float:
     enemy_hidden = 0
     best_penetration = 0.0  # 2. deepest offensive piece (rank <= Captain) toward the enemy side
     min_dist = 10.0         # 4. closest offensive piece to the enemy back rank
+    my_movable = 0
+    enemy_movable = 0.0     # known enemy pieces that can move, plus the hidden ones below
+    exact_hidden = hidden_pool is not None
+    if exact_hidden:
+        counts = hidden_pool.tolist() if hasattr(hidden_pool, 'tolist') else list(hidden_pool)
+        enemy_material += sum(n * _RANK_BY_VALUE[i + 1] for i, n in enumerate(counts))
+        enemy_movable += sum(n for i, n in enumerate(counts) if i + 1 not in _IMMOBILE_VALUES)
     for i, val in enumerate(board.flatten().tolist()):
         val = int(val)
         if val == HIDDEN_PIECE:
             # Only enemy pieces are ever hidden from the viewer (the marker has the same value
             # on both sides' views)
             enemy_hidden += 1
-            enemy_material += UNKNOWN_PIECE_RANK
+            if not exact_hidden:
+                enemy_material += UNKNOWN_PIECE_RANK
+                enemy_movable += MOVABLE_SHARE
             continue
         abs_val = abs(val)
         if abs_val < 1 or abs_val > 12:
@@ -100,8 +125,10 @@ def compute_potential(board: torch.Tensor, player_id: int) -> float:
         if not is_mine:
             enemy_known += 1
             enemy_material += rank
+            enemy_movable += abs_val not in _IMMOBILE_VALUES
             continue
         my_material += rank
+        my_movable += abs_val not in _IMMOBILE_VALUES
         if rank > OFFENSIVE_RANK_THRESHOLD:
             continue
         r = i // 10
@@ -124,13 +151,20 @@ def compute_potential(board: torch.Tensor, player_id: int) -> float:
                  w_penetration * best_penetration +
                  w_info * info_score +
                  w_proximity * proximity_score)
+    if MOBILITY_WEIGHT:
+        potential += MOBILITY_WEIGHT * (_mobility(my_movable) - _mobility(enemy_movable))
 
     return potential
 
 
+def _mobility(n: float) -> float:
+    """g(n) = log(1 + n) / log(1 + 33) in [0, 1]: concave in the number of movable pieces."""
+    return math.log1p(max(0.0, n)) / math.log1p(MOVABLE_PIECES)
+
+
 def potential_range() -> Tuple[float, float]:
     """The bounds of compute_potential under POTENTIAL_WEIGHTS (every term but material is >= 0)."""
-    return -POTENTIAL_WEIGHTS[0], float(sum(POTENTIAL_WEIGHTS))
+    return -POTENTIAL_WEIGHTS[0] - MOBILITY_WEIGHT, float(sum(POTENTIAL_WEIGHTS)) + MOBILITY_WEIGHT
 
 
 @dataclass
@@ -234,7 +268,7 @@ class UnifiedRewardShaper:
 
     def potential(self, state: GameState) -> float:
         """Φ of this side's view `state`."""
-        return compute_potential(state.board, self.player_id)
+        return compute_potential(state.board, self.player_id, getattr(state, 'hidden_pool', None))
 
     def __call__(self, previous_state: GameState, action: Optional[Tuple],
                  current_state: GameState, done: bool,

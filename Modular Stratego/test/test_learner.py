@@ -171,6 +171,24 @@ def test_target_network_has_no_dropout_and_keeps_its_noise(cpu, tiny_network, co
         assert not torch.equal(target(x), before)  # NoisyNet noise is still on
 
 
+def test_online_network_in_train_mode_is_deterministic_for_fixed_noise(cpu, tiny_network):
+    """replay() runs the online network in train mode (for NoisyNet); with attention dropout the
+    Double DQN argmax and the demonstration losses were jittered every update."""
+    agent = _agent(cpu, batch_size=8)
+    net = agent.q_network
+    assert net.training
+    x = torch.rand(2, agent.input_channels, 10, 10)
+    with torch.no_grad():
+        assert torch.equal(net(x), net(x))
+
+
+def test_no_reference_network_without_the_kl_term(cpu, tiny_network, config_override):
+    config_override(KL_REG_ENABLED=False)
+    assert _agent(cpu).reference_network is None
+    config_override(KL_REG_ENABLED=True)
+    assert _agent(cpu).reference_network is not None
+
+
 def test_n_step_battle_flag_is_the_first_steps():
     from network.prioritized_memory import NStepBuffer
     buf = NStepBuffer(n_steps=3, gamma=0.5)
@@ -338,11 +356,12 @@ def test_observations_are_stored_as_uint8_and_read_back(cpu, tiny_network):
     state = StrategoEnvironment(cpu).reset()
     x = agent.get_batch_state_representation([state.board], [state])[0]
     x[27:30] = torch.rand(3, 10, 10)  # the fraction planes
-    x[30:] = (torch.rand(2, 10, 10) < 0.5).float()  # the binary moved planes
+    x[30:32] = (torch.rand(2, 10, 10) < 0.5).float()  # the binary moved planes
+    x[32:] = torch.rand(x.size(0) - 32, 10, 10)  # the battle-outlook probabilities
     packed = pack_state(x, 'cpu', torch.float32)
     assert packed.dtype == torch.uint8
     back = unpack_states([packed], 'cpu')[0]
-    assert torch.equal(back[:27], x[:27]) and torch.equal(back[30:], x[30:])
+    assert torch.equal(back[:27], x[:27]) and torch.equal(back[30:32], x[30:32])
     assert (back - x).abs().max() <= 1 / 510 + 1e-6
     y = torch.randn(32, 10, 10)
     assert torch.equal(unpack_states([pack_state(y, 'cpu', torch.float32)], 'cpu')[0], y)
@@ -442,3 +461,194 @@ def test_mean_loss_is_added_to_the_cross_entropy(cpu, tiny_network, config_overr
         agent.memory.sample = (lambda s: lambda n: s)(agent.memory.sample(8))  # the same batch
         losses[weight] = agent.replay()
     assert losses[1.0] > losses[0.0]
+
+
+# ---------------------------------------------------------------- horizontal flip & battle-outlook parity
+
+def _mirror_game_state(state):
+    """Horizontally mirror (col c -> 9 - c) a GameState in board coordinates."""
+    mirrored = state.clone()
+    mirrored.board = torch.flip(state.board, [1])
+    if state.own_revealed is not None:
+        mirrored.own_revealed = torch.flip(state.own_revealed, [1])
+    if state.moved is not None:
+        mirrored.moved = torch.flip(state.moved, [1])
+    if state.long_moved is not None:
+        mirrored.long_moved = torch.flip(state.long_moved, [1])
+    return mirrored
+
+
+def test_horizontal_flip_matches_mirrored_observation_all_41_planes(cpu, tiny_network, config_override):
+    """_flip_state_horizontal must swap directional battle-outlook planes 34<->35 and 38<->39 so
+    that flipping an encoded observation matches encoding the horizontally mirrored position."""
+    from environment.board import HIDDEN_PIECE, LAKE_SQUARE
+    from environment.game_state import GameState
+    from environment.observation import encode_observation, NUM_OBS_PLANES
+    from environment.piece import PieceType as P
+    from network.drqn_agent import _flip_state_horizontal
+
+    board = torch.zeros(10, 10, dtype=torch.int16)
+    for r, c in ((4, 2), (4, 3), (5, 2), (5, 3), (4, 6), (4, 7), (5, 6), (5, 7)):
+        board[r, c] = LAKE_SQUARE
+    # Asymmetric own & enemy pieces creating distinct LEFT vs RIGHT P(win) and P(lose)
+    board[6, 1] = P.CAPTAIN.value          # adjacent to revealed Scout on left (wins), Marshal on right (loses)
+    board[6, 0] = -P.SCOUT.value
+    board[6, 2] = -P.MARSHAL.value
+    board[7, 4] = P.SCOUT.value            # Scout ray: left hits hidden moved enemy at (7, 1), right hits General at (7, 8)
+    board[7, 1] = HIDDEN_PIECE
+    board[7, 8] = -P.GENERAL.value
+    board[8, 5] = P.SPY.value              # Spy next to revealed Marshal on left, hidden unmoved on right
+    board[8, 4] = -P.MARSHAL.value
+    board[8, 6] = HIDDEN_PIECE
+    board[2, 3] = P.MINER.value            # Miner next to revealed Bomb on right, hidden long-moved Scout on left
+    board[2, 4] = -P.BOMB.value
+    board[2, 2] = HIDDEN_PIECE
+    board[9, 0] = P.FLAG.value
+    board[0, 9] = -P.FLAG.value
+
+    own_revealed = torch.zeros(10, 10, dtype=torch.bool)
+    own_revealed[6, 1] = True
+    moved = torch.zeros(10, 10, dtype=torch.bool)
+    moved[7, 1] = True
+    moved[2, 2] = True
+    long_moved = torch.zeros(10, 10, dtype=torch.bool)
+    long_moved[2, 2] = True
+    hidden_pool = torch.tensor([0, 1, 2, 1, 1, 0, 1, 0, 1, 0, 0, 2], dtype=torch.float32)
+
+    state = GameState(
+        board=board, current_player=1, turn_count=37, game_over=False, winner=None,
+        move_history=[], uncertainty_mask=torch.zeros(10, 10),
+        revealed_pieces_p1={}, revealed_pieces_p2={},
+        plies_since_battle=19, no_battle_draw_plies=200, max_turns=1500, observability=0.0,
+        own_revealed=own_revealed, moved=moved, long_moved=long_moved, hidden_pool=hidden_pool,
+    )
+    mirrored = _mirror_game_state(state)
+
+    for player in (1, -1):
+        obs = encode_observation(state, player, device=cpu)
+        obs_mirrored = encode_observation(mirrored, player, device=cpu)
+        assert obs.shape == (NUM_OBS_PLANES, 10, 10)
+
+        flipped = _flip_state_horizontal(obs)
+        assert torch.allclose(flipped, obs_mirrored, atol=1e-6), (
+            f"player={player} mismatched planes: "
+            f"{[c for c in range(NUM_OBS_PLANES) if not torch.allclose(flipped[c], obs_mirrored[c], atol=1e-6)]}"
+        )
+        # Confirm naive flip without channel swap actually fails on planes 34/35/38/39
+        naive = torch.flip(obs, [2])
+        assert not torch.allclose(naive[[34, 35, 38, 39]], obs_mirrored[[34, 35, 38, 39]], atol=1e-4)
+
+    # Also verify replay buffer and demo buffer store the channel-swapped flipped state
+    config_override(ENABLE_DATA_AUGMENTATION=True, AUGMENTATION_TYPES=["flip"], N_STEPS=1)
+    agent = _agent(cpu)
+    obs_p1 = encode_observation(state, 1, device=cpu)
+    obs_p1_mir = encode_observation(mirrored, 1, device=cpu)
+    move = ((6, 1), (6, 0))
+    agent._add_experience(obs_p1, move, 0.0, obs_p1, True)
+    stored_flip = agent.memory.tree.data[1].state.float() / 255.0
+    assert torch.allclose(stored_flip, obs_p1_mir, atol=1 / 255.0 + 1e-5)
+
+    agent.enable_demonstrations(16)
+    agent.recording_demos = True
+    agent._add_experience(obs_p1, move, 0.0, obs_p1, True)
+    agent.recording_demos = False
+    demo_flip = agent.demo_memory.buffer[1].state.float() / 255.0
+    assert torch.allclose(demo_flip, obs_p1_mir, atol=1 / 255.0 + 1e-5)
+
+
+# ---------------------------------------------------------------- PBRS-aware PER win boost
+
+def test_pbrs_dominant_win_gets_per_win_boost_from_unshaped_outcome(cpu, tiny_network, config_override):
+    """Terminal PBRS subtracts Phi(s_prev), pulling dominant wins below 0.8 (and deep losses above
+    0.8). Win detection must use unshaped winner info when provided, falling back to reward >= 0.8."""
+    config_override(ENABLE_DATA_AUGMENTATION=True, AUGMENTATION_TYPES=["flip"], N_STEPS=1,
+                    REVEALED_ATTACK_PRIORITY=1.0)
+    agent = _agent(cpu)
+    s = torch.zeros(agent.input_channels, 10, 10)
+    base_leaf = agent.memory.capacity - 1
+
+    # 1. Dominant win: shaped terminal reward is -0.5 (< 0.8), unshaped winner == player_id (1) -> 10x boost
+    agent._add_experience(s, 0, -0.5, s, True, info={'winner': 1})
+    # 2. Same via 'game_winner' key -> 10x boost
+    agent._add_experience(s, 1, -1.2, s, True, info={'game_winner': 1})
+    # 3. Deep loss whose shaped terminal reward is +1.0 (>= 0.8), unshaped winner == -1 -> NO 10x boost
+    agent._add_experience(s, 2, 1.0, s, True, info={'winner': -1})
+    # 4. Draw with shaped reward >= 0.8, unshaped winner == 0 -> NO 10x boost
+    agent._add_experience(s, 3, 0.9, s, True, info={'winner': 0})
+    # 5. Fallback when no unshaped winner is provided: reward >= 0.8 -> 10x boost; reward < 0.8 -> 1x
+    agent._add_experience(s, 4, 1.0, s, True)
+    agent._add_experience(s, 5, 0.2, s, True)
+
+    leaves = agent.memory.tree.tree[base_leaf:base_leaf + len(agent.memory)]
+    # Each call writes original + horizontal flip with identical priority
+    expected = [10.0, 10.0, 10.0, 10.0, 1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 1.0, 1.0]
+    assert np.allclose(leaves, expected)
+
+    # 6. remember() and remember_batch() (with N_STEPS=3) propagate unshaped winner from info or next_game_state
+    config_override(ENABLE_DATA_AUGMENTATION=False, N_STEPS=3, REVEALED_ATTACK_PRIORITY=1.0)
+    agent_n = _agent(cpu)
+    steps = _steps(cpu, 3)
+    for k, (st, mv, nxt, nxt_moves) in enumerate(steps):
+        is_last = (k == 2)
+        nxt_copy = nxt.clone()
+        if is_last:
+            nxt_copy.winner = 1  # simulate TurnTracker closing on opponent's move (info lacks winner)
+        agent_n.remember_batch([st.board], [mv], [-0.4 if is_last else 0.0], [nxt_copy.board],
+                               [is_last], [True], [st], [nxt_copy],
+                               infos=[{}], next_legal_moves=[None if is_last else nxt_moves])
+    base_n = agent_n.memory.capacity - 1
+    leaves_n = agent_n.memory.tree.tree[base_n:base_n + len(agent_n.memory)]
+    assert len(leaves_n) == 3 and np.allclose(leaves_n, [10.0, 10.0, 10.0])
+
+    # 7. remember() accepts info dict with unshaped winner
+    agent_r = _agent(cpu)
+    st, mv, nxt, _ = steps[0]
+    agent_r.remember(st, mv, -0.5, nxt, True, info={'winner': 1})
+    assert agent_r.memory.tree.tree[agent_r.memory.capacity - 1] == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------- action-policy entropy & dynamic damping
+
+def test_policy_entropy_and_dynamic_damping_use_action_policy_not_c51_atoms(cpu, tiny_network, config_override):
+    """ENTROPY_REG_ENABLED, KL_REG_ENABLED, and DYNAMIC_DAMPING_ENABLED must regularize the
+    softmax policy over (legal) actions derived from expected Q-values, not the 51 C51 atoms."""
+    from network.drqn_agent import RainbowAgent
+
+    # 1. Exact unit check of _policy_from_q on masked legal actions
+    q = torch.zeros(2, NUM_ACTIONS, requires_grad=True)
+    legal = torch.zeros(2, NUM_ACTIONS, dtype=torch.bool)
+    legal[0, :5] = True
+    legal[1, 10:18] = True
+    pi, safe_log_pi, eff_mask = RainbowAgent._policy_from_q(q, legal)
+    ent = -(pi * safe_log_pi).sum(dim=1)
+    assert torch.allclose(ent, torch.tensor([np.log(5.0), np.log(8.0)], dtype=torch.float32), atol=1e-5)
+    assert torch.allclose(pi[~legal], torch.zeros_like(pi[~legal]))
+    kl_uniform = torch.log(eff_mask.sum(dim=1).float()) - ent
+    assert torch.allclose(kl_uniform, torch.zeros(2), atol=1e-5)
+    # Gradients through masked entropy must be finite and zero on illegal actions
+    (ent.sum()).backward()
+    assert torch.isfinite(q.grad).all()
+    assert torch.equal(q.grad[~legal], torch.zeros_like(q.grad[~legal]))
+
+    # 2. End-to-end replay() with all three policy regularizers enabled (with & without demo legal masks)
+    config_override(WARMUP_STEPS=0, KL_REG_ENABLED=True, ENTROPY_REG_ENABLED=True, DYNAMIC_DAMPING_ENABLED=True)
+    agent = _agent(cpu, batch_size=8)
+    agent.amp_enabled = False
+    _fill(agent, n=24)
+    loss_per = agent.replay(episode=10)
+    assert loss_per is not None and np.isfinite(loss_per)
+    for p in agent.q_network.parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all()
+
+    # With demo_only (provides state_legal masks per row)
+    agent.enable_demonstrations(32)
+    mask = np.zeros(NUM_ACTIONS, dtype=bool)
+    mask[[0, 1, 2, 3, 4]] = True
+    from network.drqn_agent import pack_legal_mask
+    packed = pack_legal_mask(mask)
+    s = torch.zeros(agent.input_channels, 10, 10)
+    for i in range(16):
+        agent.demo_memory.add(s, i % 5, 0.0, s, True, legal=packed)
+    loss_demo = agent.replay(episode=10, demo_only=True)
+    assert loss_demo is not None and np.isfinite(loss_demo)

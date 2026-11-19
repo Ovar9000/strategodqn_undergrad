@@ -34,7 +34,7 @@ from network.prioritized_memory import (StandardReplayBuffer, PrioritizedReplayB
 # Heuristic Action Filter for Top-100 move selection
 from environment.heuristic_filter import HeuristicMoveFilter
 
-# Lossless 3600-action encoding and 32 observation planes, both in the mover's canonical frame
+# Lossless 3600-action encoding and 41 observation planes, both in the mover's canonical frame
 from environment.action_encoding import NUM_ACTIONS, encode_move, decode_action, mirror_action, legal_action_mask
 from environment.observation import (NUM_OBS_PLANES, CH_ENEMY_KNOWN, NUM_RANKS, encode_observations,
                                      to_canonical)
@@ -51,8 +51,10 @@ from environment.observation import (NUM_OBS_PLANES, CH_ENEMY_KNOWN, NUM_RANKS, 
 # capture's shaping (~0.02-0.05) a tenth of an atom.
 # formal_8: material weight 5, so Phi lies in [-5, 5] and every return in [-6, 6]; 0.24 per atom,
 # and a won exchange (~0.3 of shaping) now spans more than an atom.
-V_MIN = -6.0
-V_MAX = 6.0
+# formal_12: plus the mobility term (MOBILITY_WEIGHT 1), so Phi lies in [-6, 6] and every return
+# in [-7, 7]; 0.28 per atom.
+V_MIN = -7.0
+V_MAX = 7.0
 NUM_ATOMS = 51
 
 
@@ -75,6 +77,21 @@ def mirror_packed_mask(packed: np.ndarray) -> np.ndarray:
     mirrored = np.zeros_like(mask)
     mirrored[MIRROR_PERMUTATION] = mask
     return np.packbits(mirrored)
+
+
+def _flip_state_horizontal(state: torch.Tensor) -> torch.Tensor:
+    """Left-right mirror (col c -> 9 - c) of a canonical-frame state tensor.
+
+    In addition to reflecting the width axis, swaps the directional battle-outlook
+    channels LEFT <-> RIGHT when the 41 observation planes are present:
+    P(win) planes 34 <-> 35 and P(lose) planes 38 <-> 39.
+    """
+    flipped = torch.flip(state, [-1])
+    if flipped.dim() == 3 and flipped.shape[0] >= 41:
+        flipped[[34, 35, 38, 39]] = flipped[[35, 34, 39, 38]]
+    elif flipped.dim() == 4 and flipped.shape[1] >= 41:
+        flipped[:, [34, 35, 38, 39]] = flipped[:, [35, 34, 39, 38]]
+    return flipped
 
 import sys
 
@@ -208,7 +225,7 @@ class RainbowAgent:
         self.noisy_acting = not inference_only
         
         # Rainbow Networks
-        # 32 observation planes (+ HISTORY_EMBEDDING_SIZE AAREN planes when AAREN_ENABLED)
+        # 41 observation planes (+ HISTORY_EMBEDDING_SIZE AAREN planes when AAREN_ENABLED)
         self.input_channels = NUM_OBS_PLANES + self.history_embedding_size
         self.q_network = RainbowDQN(input_shape=(self.input_channels, 10, 10), output_size=action_size, num_atoms=self.num_atoms).to(device)
         self.target_network = RainbowDQN(input_shape=(self.input_channels, 10, 10), output_size=action_size, num_atoms=self.num_atoms).to(device)
@@ -223,26 +240,6 @@ class RainbowAgent:
                 print(f"[OK] Rainbow DQN compiled with mode='{TORCH_COMPILE_MODE}'")
         except (ImportError, Exception) as e:
             pass  # Silently skip if unavailable
-        
-        # Reference Network for KL-Regularization (anti-cycling)
-        # This network updates MUCH slower than target to anchor policy
-        self.reference_network = RainbowDQN(
-            input_shape=(self.input_channels, 10, 10), 
-            output_size=action_size, 
-            num_atoms=self.num_atoms
-        ).to(device)
-        
-        # PyTorch 2.0+ Compilation (optional speedup)
-        try:
-            from settings.training_config import USE_TORCH_COMPILE, TORCH_COMPILE_MODE
-            if USE_TORCH_COMPILE:
-                self.reference_network = torch.compile(self.reference_network, mode=TORCH_COMPILE_MODE)
-        except (ImportError, Exception):
-            pass  # Silently skip if unavailable
-            
-        self.reference_network.load_state_dict(self.q_network.state_dict())
-        self.reference_network.eval()  # Never train directly
-        self.reference_update_counter = 0
         
         # KL and Entropy Regularization Settings
         try:
@@ -265,6 +262,25 @@ class RainbowAgent:
             self.entropy_coeff_start = 0.1
             self.entropy_coeff_end = 0.01
             self.entropy_anneal_episodes = 50000
+
+        # Reference Network for KL-Regularization (anti-cycling), updated much slower than the
+        # target. Only built when the KL term is on: otherwise it is a third, unused network copy.
+        self.reference_network = None
+        self.reference_update_counter = 0
+        if self.kl_reg_enabled and not self.inference_only:
+            self.reference_network = RainbowDQN(
+                input_shape=(self.input_channels, 10, 10),
+                output_size=action_size,
+                num_atoms=self.num_atoms
+            ).to(device)
+            try:
+                from settings.training_config import USE_TORCH_COMPILE, TORCH_COMPILE_MODE
+                if USE_TORCH_COMPILE:
+                    self.reference_network = torch.compile(self.reference_network, mode=TORCH_COMPILE_MODE)
+            except (ImportError, Exception):
+                pass  # Silently skip if unavailable
+            self.reference_network.load_state_dict(self.q_network.state_dict())
+            self.reference_network.eval()  # Never train directly
         
         # Ataraxos Techniques Configuration
         try:
@@ -415,15 +431,20 @@ class RainbowAgent:
         self.recording_demos = False
         try:
             from settings.training_config import (COLD_START_DEMO_RATIO, COLD_START_DEMO_DECAY_EPISODES,
-                                                  COLD_START_MARGIN, COLD_START_MARGIN_WEIGHT)
+                                                  COLD_START_MARGIN, COLD_START_MARGIN_WEIGHT,
+                                                  COLD_START_BC_WEIGHT, COLD_START_BC_TEMP)
         except ImportError:
             COLD_START_DEMO_RATIO, COLD_START_DEMO_DECAY_EPISODES = 0.0, 0
             COLD_START_MARGIN, COLD_START_MARGIN_WEIGHT = 0.0, 0.0
+            COLD_START_BC_WEIGHT, COLD_START_BC_TEMP = 0.0, 1.0
         self.demo_ratio = COLD_START_DEMO_RATIO
         self.demo_decay_episodes = COLD_START_DEMO_DECAY_EPISODES
         self.demo_margin = COLD_START_MARGIN
         self.demo_margin_weight = COLD_START_MARGIN_WEIGHT
         self._last_margin_loss = 0.0
+        self.demo_bc_weight = COLD_START_BC_WEIGHT
+        self.demo_bc_temp = COLD_START_BC_TEMP
+        self._last_bc_loss = 0.0
         from settings.training_config import REVEALED_ATTACK_PRIORITY, MEAN_LOSS_WEIGHT
         self.revealed_attack_priority = REVEALED_ATTACK_PRIORITY
         self.mean_loss_weight = MEAN_LOSS_WEIGHT
@@ -438,6 +459,11 @@ class RainbowAgent:
     def last_margin_loss(self) -> float:
         """Large-margin loss of the latest update (0 without demonstrations in the batch)."""
         return float(self._last_margin_loss)
+
+    @property
+    def last_bc_loss(self) -> float:
+        """Behaviour-cloning loss of the latest update (0 without demonstrations in the batch)."""
+        return float(self._last_bc_loss)
 
     def enable_async(self):
         """Prepare for replay() on another thread. Acting reads acting_network, a copy of
@@ -618,7 +644,7 @@ class RainbowAgent:
     def get_state_representation(self, board, pbs_instance=None, full_observability=False, player=None):
         """
         Network input for one position, in the viewer's canonical frame (Player 2 rotated 180
-        degrees): the 32 observation planes of environment/observation.py, followed by the
+        degrees): the 41 observation planes of environment/observation.py, followed by the
         AAREN history embedding planes when AAREN_ENABLED (zeros without a history instance).
 
         Args:
@@ -655,7 +681,7 @@ class RainbowAgent:
 
     def get_board_only_representation(self, board):
         """
-        The 32 observation planes only (no AAREN planes), canonical frame.
+        The 41 observation planes only (no AAREN planes), canonical frame.
 
         Used for replay buffer storage. AAREN embeddings are stored as history snapshots and
         added at replay time.
@@ -671,16 +697,31 @@ class RainbowAgent:
         """(B, 32, 10, 10) observation planes for a batch of GameStates or bare boards."""
         return encode_observations(list(states), self.player_id, device=self.device)
 
-    def remember(self, state, action, reward, next_state, done):
+    @staticmethod
+    def _extract_winner(info=None, next_state=None):
+        """Extract unshaped game winner from info dict or next GameState, or None if unavailable."""
+        winner = None
+        if isinstance(info, dict):
+            winner = info.get('winner')
+            if winner is None:
+                winner = info.get('game_winner')
+        if winner is None and next_state is not None:
+            winner = getattr(next_state, 'winner', None)
+        return winner
+
+    def remember(self, state, action, reward, next_state, done, info=None):
         """Store experience in replay buffer with automated augmentation"""
         # Process states
+        winner = self._extract_winner(info, next_state) if done else None
         state_processed = self.get_state_representation(state, pbs_instance=self.pbs)
         next_state_processed = self.get_state_representation(next_state, pbs_instance=self.pbs)
         
-        self._add_experience(state_processed, action, reward, next_state_processed, done)
+        self._add_experience(state_processed, action, reward, next_state_processed, done,
+                             info=info, game_winner=winner)
 
     def _add_experience(self, state, action, reward, next_state, done, is_battle=False,
-                         history_snapshot=None, next_history_snapshot=None, next_legal=None, legal=None):
+                         history_snapshot=None, next_history_snapshot=None, next_legal=None, legal=None,
+                         info=None, game_winner=None):
         """
         Internal helper to add experience to memory with potential augmentation.
         Always expects 'state' and 'next_state' to be processed tensors.
@@ -693,6 +734,8 @@ class RainbowAgent:
             next_legal: packed legal-action mask of next_state (pack_legal_mask), None if unknown;
                 dropped for terminal transitions, which do not bootstrap
             legal: packed legal-action mask of state (demonstrations only: the margin loss)
+            info: optional step/transition info dict (used for unshaped winner detection)
+            game_winner: optional unshaped game winner (overrides info lookup when provided)
 
         While recording_demos is set the transition (and its flip) goes to demo_memory instead.
         """
@@ -707,23 +750,30 @@ class RainbowAgent:
         # 2. Add original experience
         # Clip reward to C51 support range to avoid instability
         reward_clipped = max(self.v_min, min(self.v_max, reward))
+        if game_winner is None and done:
+            game_winner = self._extract_winner(info)
         
         with self._memory_access():
             self._store(state, action_idx, reward_clipped, next_state, done, is_battle, history_snapshot,
-                        next_history_snapshot, next_legal, legal)
+                        next_history_snapshot, next_legal, legal, info=info, game_winner=game_winner)
 
     def _store(self, state, action_idx, reward_clipped, next_state, done, is_battle, history_snapshot,
-               next_history_snapshot, next_legal, legal):
+               next_history_snapshot, next_legal, legal, info=None, game_winner=None):
         """The writes of _add_experience (see there)."""
-        # SELF-IMITATION LEARNING: Detect winning experiences for priority boost
-        # Win rewards are now ±1.0, so use 0.8 as threshold
-        is_winning_experience = (reward_clipped >= 0.8 and done)
+        # SELF-IMITATION LEARNING: Detect winning experiences for priority boost.
+        # Prefer the unshaped game outcome when provided because terminal PBRS subtracts
+        # Phi(s_prev), which can pull dominant wins below 0.8 (and push deep losses above 0.8).
+        winner = game_winner if game_winner is not None else self._extract_winner(info)
+        if winner is not None:
+            is_winning_experience = bool(done and winner == self.player_id)
+        else:
+            is_winning_experience = bool(reward_clipped >= 0.8 and done)
 
         if self.recording_demos:
             self.demo_memory.add(state, action_idx, reward_clipped, next_state, done, next_legal=next_legal, legal=legal)
             if self.aug_enabled and "flip" in self.aug_types:
-                self.demo_memory.add(torch.flip(state, [2]), mirror_action(action_idx), reward_clipped,
-                                     torch.flip(next_state, [2]), done,
+                self.demo_memory.add(_flip_state_horizontal(state), mirror_action(action_idx), reward_clipped,
+                                     _flip_state_horizontal(next_state), done,
                                      next_legal=mirror_packed_mask(next_legal) if next_legal is not None else None,
                                      legal=mirror_packed_mask(legal) if legal is not None else None)
             return
@@ -749,8 +799,8 @@ class RainbowAgent:
         if self.aug_enabled:
             # --- Horizontal Flip (Mirror): columns c -> 9 - c ---
             if "flip" in self.aug_types:
-                state_flip = torch.flip(state, [2])
-                next_state_flip = torch.flip(next_state, [2])
+                state_flip = _flip_state_horizontal(state)
+                next_state_flip = _flip_state_horizontal(next_state)
                 next_legal_flip = mirror_packed_mask(next_legal) if next_legal is not None else None
                 self.memory.add(state_flip, mirror_action(action_idx), reward_clipped, next_state_flip, done,
                                 next_legal=next_legal_flip, **boost)
@@ -772,7 +822,7 @@ class RainbowAgent:
         Store multiple experiences efficiently with batched state processing.
         Uses N-step returns if enabled.
         
-        Stores the 32 observation planes + AAREN history snapshots (when AAREN is on).
+        Stores the 41 observation planes + AAREN history snapshots (when AAREN is on).
         
         Args:
             states: List of game states (boards)
@@ -849,10 +899,13 @@ class RainbowAgent:
             
             # BATTLE DETECTION: Check if this transition involved a capture
             # Battles are detected via revealed_in_step in info dict
+            info_i = infos[i] if (infos and i < len(infos)) else None
             is_battle = False
-            if infos and i < len(infos) and infos[i]:
-                revealed = infos[i].get('revealed_in_step', [])
+            if info_i:
+                revealed = info_i.get('revealed_in_step', [])
                 is_battle = len(revealed) > 0  # Any piece revealed = battle occurred
+            next_gs_i = next_game_states[i] if (next_game_states and i < len(next_game_states)) else None
+            winner_i = self._extract_winner(info_i, next_gs_i if next_gs_i is not None else next_states[i]) if dones[i] else None
             
             lane = lane_ids[i]
             next_legal = None
@@ -888,7 +941,9 @@ class RainbowAgent:
                     n_state, n_action, n_reward, n_next_state, n_done, n_hist, n_next_hist, n_legal, n_first_legal, n_battle = n_step_result
                     self._add_experience(n_state, n_action, n_reward, n_next_state, n_done,
                                          is_battle=n_battle, history_snapshot=n_hist,
-                                         next_history_snapshot=n_next_hist, next_legal=n_legal, legal=n_first_legal)
+                                         next_history_snapshot=n_next_hist, next_legal=n_legal, legal=n_first_legal,
+                                         info=info_i if n_done else None,
+                                         game_winner=winner_i if n_done else None)
                 
                 # Flush remaining if episode done
                 if dones[i]:
@@ -897,19 +952,24 @@ class RainbowAgent:
                         n_state, n_action, n_reward, n_next_state, n_done, n_hist, n_next_hist, n_legal, n_first_legal, n_battle = result
                         self._add_experience(n_state, n_action, n_reward, n_next_state, n_done,
                                              is_battle=n_battle, history_snapshot=n_hist,
-                                             next_history_snapshot=n_next_hist, next_legal=n_legal, legal=n_first_legal)
+                                             next_history_snapshot=n_next_hist, next_legal=n_legal, legal=n_first_legal,
+                                             info=info_i if n_done else None,
+                                             game_winner=winner_i if n_done else None)
                     self.n_step_buffers[lane].reset()
             else:
                 # Standard 1-step: add directly using central helper
                 self._add_experience(state_tensors[i], action, reward, next_state_tensors[i], dones[i],
                                      is_battle=is_battle, history_snapshot=history_snapshots[i],
                                      next_history_snapshot=next_history_snapshots[i], next_legal=next_legal,
-                                     legal=legal)
+                                     legal=legal, info=info_i, game_winner=winner_i)
             
             # Episode buffer: finalize episode on done
             if dones[i] and self.episode_replay_enabled and self.episode_memory is not None:
-                # Outcome: sign of terminal reward (+1 win, -1 loss, 0 draw)
-                outcome = 1.0 if reward > 0.5 else (-1.0 if reward < -0.5 else 0.0)
+                # Outcome: prefer unshaped game winner (+1 win, -1 loss, 0 draw), fall back to terminal reward sign
+                if winner_i is not None:
+                    outcome = 1.0 if winner_i == self.player_id else (-1.0 if winner_i == -self.player_id else 0.0)
+                else:
+                    outcome = 1.0 if reward > 0.5 else (-1.0 if reward < -0.5 else 0.0)
                 total_reward = reward  # terminal reward as proxy
                 self.episode_memory.end_episode(lane, outcome, total_reward)
 
@@ -1290,7 +1350,8 @@ class RainbowAgent:
         sample_size = n_per_samples
         if self.advantage_filtering:
             sample_size = n_per_samples * self.oversample_factor
-        
+
+        state_legal = None
         with self._memory_access():  # sampling (async mode: the acting thread stores meanwhile)
             if demo_only:
                 states, actions, rewards, next_states, dones, next_legal, state_legal = self.demo_memory.sample(n_demo)
@@ -1370,7 +1431,7 @@ class RainbowAgent:
                     indices = list(indices) + [-1] * n_demo  # not PER entries: no priority update
         
         # --- AAREN EMBEDDING PLANES FROM STORED SNAPSHOTS ---
-        # Stored states are the 32 observation planes; with AAREN on, the network also reads
+        # Stored states are the 41 observation planes; with AAREN on, the network also reads
         # the embedding planes the agent saw when it acted (state) and will act on (next state).
         if self.history_embedding_size and states.size(1) == NUM_OBS_PLANES:
             with torch.no_grad():
@@ -1434,6 +1495,7 @@ class RainbowAgent:
                     next_legal = next_legal[top_k_indices]
                 if is_demo is not None:
                     is_demo = is_demo[top_k_indices]
+                if state_legal is not None:
                     state_legal = state_legal[top_k_indices]
 
                 # Apply filter efficiently to pre-computed tensors!
@@ -1489,68 +1551,83 @@ class RainbowAgent:
             c51_loss = loss_per_sample.mean()
 
         # --- LARGE-MARGIN LOSS ON THE DEMONSTRATIONS (DQfD) ---
+        # Behaviour cloning: cross-entropy of the demonstrated move under a softmax of the legal
+        # moves' Q-values / COLD_START_BC_TEMP. Unlike the margin, which only pushes down the best
+        # rival, it pushes down every legal move in proportion to how much it competes.
         margin_loss = torch.tensor(0.0, device=self.device)
-        if is_demo is not None and self.demo_margin_weight and bool(is_demo.any()):
+        bc_loss = torch.tensor(0.0, device=self.device)
+        if is_demo is not None and (self.demo_margin_weight or self.demo_bc_weight) and bool(is_demo.any()):
             rows = is_demo.nonzero(as_tuple=True)[0]
             q = (F.softmax(current_logits[rows].float(), dim=2) * self.support).sum(dim=2)  # (demos, actions)
             demo_actions = actions[rows].view(-1, 1)
-            margins = torch.full_like(q, self.demo_margin).scatter_(1, demo_actions, 0.0)
-            best = (q + margins).masked_fill(~state_legal[rows], float('-inf')).max(dim=1).values
-            margin_loss = (best - q.gather(1, demo_actions).squeeze(1)).mean()
+            legal = state_legal[rows]
+            if self.demo_margin_weight:
+                margins = torch.full_like(q, self.demo_margin).scatter_(1, demo_actions, 0.0)
+                best = (q + margins).masked_fill(~legal, float('-inf')).max(dim=1).values
+                margin_loss = (best - q.gather(1, demo_actions).squeeze(1)).mean()
+            if self.demo_bc_weight:
+                bc_loss = F.cross_entropy((q / self.demo_bc_temp).masked_fill(~legal, float('-inf')),
+                                          demo_actions.view(-1))
         self._last_margin_loss = margin_loss.detach()
+        self._last_bc_loss = bc_loss.detach()
         
+        # --- POLICY REGULARIZERS (over expected-Q softmax policy on actions, NOT C51 atoms) ---
+        policy_reg_active = self.kl_reg_enabled or self.entropy_reg_enabled or self.dynamic_damping
+        if policy_reg_active:
+            current_q = (current_log_probs.exp() * self.support).sum(dim=2)  # (batch, actions)
+            current_pi, current_safe_log_pi, effective_legal = self._policy_from_q(current_q, state_legal)
+            policy_entropy = -(current_pi * current_safe_log_pi).sum(dim=1)  # (batch,)
+
         # --- KL-REGULARIZATION (Anti-Cycling) ---
         kl_loss = torch.tensor(0.0, device=self.device)
         if self.kl_reg_enabled:
             with torch.no_grad():
                 with torch.amp.autocast('cuda', enabled=self.amp_enabled):
                     ref_log_probs = self.reference_network(states)
-            # KL(ref || current) for each action's distribution
-            # Using log-space: KL = sum(p * (log_p - log_q))
-            ref_probs = ref_log_probs.exp()
-            kl_per_action = (ref_probs * (ref_log_probs - current_log_probs)).sum(dim=2)  # (batch, actions)
-            # Average over actions and batch
-            kl_loss = kl_per_action.mean()
+                ref_q = (ref_log_probs.float().exp() * self.support).sum(dim=2)
+                ref_pi, ref_safe_log_pi, _ = self._policy_from_q(ref_q, effective_legal)
+            # KL(pi_ref || pi_current) over actions
+            kl_loss = (ref_pi * (ref_safe_log_pi - current_safe_log_pi)).sum(dim=1).mean()
         
         # --- ENTROPY REGULARIZATION (Bluffing/Mixed Strategies) ---
         entropy_bonus = torch.tensor(0.0, device=self.device)
         if self.entropy_reg_enabled:
             # Anneal entropy coefficient
             entropy_coeff = self.entropy_coeff_end + (self.entropy_coeff_start - self.entropy_coeff_end) * \
-                           max(0, 1 - (episode or 0) / self.entropy_anneal_episodes)
-            # Entropy = -sum(p * log(p))
-            current_probs = current_log_probs.exp()
-            action_entropy = -(current_probs * current_log_probs).sum(dim=2)  # (batch, actions)
-            # Higher entropy = more exploration, so we SUBTRACT entropy loss (add entropy bonus)
-            entropy_bonus = action_entropy.mean() * entropy_coeff
+                           max(0, 1 - (episode or 0) / max(self.entropy_anneal_episodes, 1))
+            # Higher policy entropy over legal actions = more exploration, so SUBTRACT from loss
+            entropy_bonus = policy_entropy.mean() * entropy_coeff
         
         # --- ATARAXOS DYNAMIC DAMPING (Magnetic Regularization) ---
         magnet_loss = torch.tensor(0.0, device=self.device)
         target_kl_loss = torch.tensor(0.0, device=self.device)
         if self.dynamic_damping:
             # Normalized training progress [0, 1]
-            t = min(1.0, (episode or 0) / self.total_episodes)
+            t = min(1.0, (episode or 0) / max(self.total_episodes, 1))
             
-            # Magnet Policy: KL toward uniform (quadratic decay)
+            # Magnet Policy: KL(pi || uniform_legal) = log(n_legal) - H(pi) (quadratic decay)
             # alpha(t) = alpha_0 * (1 - t)^p
             alpha_t = self.magnet_start * ((1 - t) ** self.magnet_power)
-            # KL(π || uniform) = log(num_actions) - H(π)
-            current_probs = current_log_probs.exp()
-            action_entropy_for_magnet = -(current_probs * current_log_probs).sum(dim=2).mean()
-            magnet_loss = alpha_t * (math.log(self.action_size) - action_entropy_for_magnet)
+            if effective_legal is not None:
+                log_n_legal = torch.log(effective_legal.sum(dim=1).float().clamp_min(1.0))
+                kl_uniform = (log_n_legal - policy_entropy).clamp_min(0.0)
+            else:
+                kl_uniform = (math.log(self.action_size) - policy_entropy).clamp_min(0.0)
+            magnet_loss = alpha_t * kl_uniform.mean()
             
-            # Target KL: KL toward target network (quadratic growth)
+            # Target KL: KL(pi_target || pi_current) over actions (quadratic growth)
             # beta(t) = beta_0 + (beta_T - beta_0) * t^p
             beta_t = self.target_kl_start + (self.target_kl_end - self.target_kl_start) * (t ** self.target_kl_power)
             with torch.no_grad():
                 with torch.amp.autocast('cuda', enabled=self.amp_enabled):
                     target_log_probs = self.target_network(states)
-            target_probs = target_log_probs.exp()
-            target_kl_loss = beta_t * (target_probs * (target_log_probs - current_log_probs)).sum(dim=2).mean()
+                target_q = (target_log_probs.float().exp() * self.support).sum(dim=2)
+                target_pi, target_safe_log_pi, _ = self._policy_from_q(target_q, effective_legal)
+            target_kl_loss = beta_t * (target_pi * (target_safe_log_pi - current_safe_log_pi)).sum(dim=1).mean()
         
         # --- TOTAL LOSS ---
         loss = (c51_loss + self.kl_reg_weight * kl_loss - entropy_bonus + magnet_loss + target_kl_loss
-                + self.demo_margin_weight * margin_loss)
+                + self.demo_margin_weight * margin_loss + self.demo_bc_weight * bc_loss)
         
         # Update reference network periodically (much slower than target)
         if self.kl_reg_enabled:
@@ -1613,6 +1690,26 @@ class RainbowAgent:
             self.update_target_network()
 
         return loss.item()
+
+    @staticmethod
+    def _policy_from_q(q_values: torch.Tensor, legal_mask: Optional[torch.Tensor] = None):
+        """Softmax policy (probs, safe_log_probs, effective_mask) over actions from expected Q-values.
+
+        When `legal_mask` ((batch, actions) bool) is given, illegal actions are masked out before
+        softmax and their log-probabilities are zeroed in `safe_log_probs` so `pi * log_pi` and
+        `pi_ref * (log_pi_ref - log_pi)` produce neither NaNs nor gradients on illegal actions.
+        Rows with no legal actions fall back to allowing all actions.
+        """
+        if legal_mask is not None:
+            has_legal = legal_mask.any(dim=1, keepdim=True)
+            mask = torch.where(has_legal, legal_mask, torch.ones_like(legal_mask))
+            masked_q = q_values.masked_fill(~mask, float('-inf'))
+            log_pi = F.log_softmax(masked_q, dim=1)
+            pi = log_pi.exp()
+            safe_log_pi = log_pi.masked_fill(~mask, 0.0)
+            return pi, safe_log_pi, mask
+        log_pi = F.log_softmax(q_values, dim=1)
+        return log_pi.exp(), log_pi, None
 
     def _double_dqn_next_actions(self, next_log_probs_online, next_legal):
         """Double DQN action for each next state: the online network's best action among the

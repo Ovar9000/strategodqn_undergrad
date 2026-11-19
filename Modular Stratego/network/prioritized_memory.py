@@ -4,7 +4,7 @@ import random
 import torch
 from collections import namedtuple, deque
 
-from environment.action_encoding import NUM_ACTIONS
+from environment.action_encoding import NUM_ACTIONS, encode_move
 
 # Define Experience namedtuple
 # history_snapshot / next_history_snapshot: compact AAREN action history for replay-time reconstruction
@@ -676,13 +676,7 @@ class EpisodicReplayBuffer:
         action_indices = []
         for act in actions_list:
             if isinstance(act, (tuple, list)):
-                # Convert move tuple to action index (same as agent logic)
-                (r1, c1), (r2, c2) = act
-                dr, dc = r2 - r1, c2 - c1
-                direction_map = {(-1, 0): 0, (1, 0): 1, (0, -1): 2, (0, 1): 3}
-                d = direction_map.get((dr, dc), 0)
-                action_idx = r1 * 40 + c1 * 4 + d
-                action_indices.append(action_idx)
+                action_indices.append(encode_move(act, 1))
             else:
                 action_indices.append(int(act))
         

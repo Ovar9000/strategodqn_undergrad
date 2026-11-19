@@ -44,6 +44,7 @@ from environment import (
     CurriculumManager, TrainingPhase, HeuristicOpponent, SmartHeuristicOpponent, TrueRandomOpponent,
     LeagueManager, HeuristicSetupAgent
 )
+from environment.expert import OutlookExpert
 from network import (
     RainbowAgent, create_unified_reward_shaper, StrategoRewardConfig,
     RandomAgent, GreedyAgent, OpponentPool, RandomSetupAgent,
@@ -160,6 +161,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
     heuristic_agent = HeuristicOpponent(device=device, player_id=-1)  # Frozen heuristic for Phase 2
     smart_heuristic_agent = SmartHeuristicOpponent(device=device, player_id=-1)  # Strong heuristic opponent
     true_random_agent = TrueRandomOpponent(device=device, player_id=-1)  # Truly random opponent (easiest)
+    expert_agent = OutlookExpert(torch.device('cpu'), player_id=-1)  # one-ply scripted expert (environment/expert.py)
     
     # Initialize Curriculum Manager
     curriculum = None
@@ -368,6 +370,8 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
             current_opponent = heuristic_agent
         elif opponent_type == "smart_heuristic":
             current_opponent = smart_heuristic_agent
+        elif opponent_type == "expert":
+            current_opponent = expert_agent
         elif opponent_type == "greedy":
             current_opponent = greedy_agent
         elif opponent_type == "exploiters":
@@ -433,6 +437,8 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
             return HeuristicOpponent(device=device, player_id=-1)
         if opponent_type == "greedy":
             return GreedyAgent(device=device, player_id=-1, config=master_reward_config)
+        if opponent_type == "expert":
+            return OutlookExpert(torch.device('cpu'), player_id=-1)
         return SmartHeuristicOpponent(device=device, player_id=-1)
 
     def run_evaluation():
@@ -446,6 +452,9 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
         t_eval = time.perf_counter()
         eval_opponents = dict(gates or {'smart_heuristic': None})
         eval_opponents.setdefault('random', None)
+        from settings.training_config import EVAL_EXTRA_OPPONENTS
+        for extra in EVAL_EXTRA_OPPONENTS:
+            eval_opponents.setdefault(extra, None)
         for opp_type in eval_opponents:
             results[opp_type] = play_evaluation_games(
                 agent1, make_eval_opponent(opp_type), EVAL_GAMES, device,
@@ -463,16 +472,17 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
     
     # --- COLD START FROM DEMONSTRATIONS (DQfD) ---
     from settings.training_config import (COLD_START_ENABLED, COLD_START_GAMES, COLD_START_DEMO_CAPACITY,
-                                          COLD_START_PRETRAIN_UPDATES, DEFAULT_MAX_TURNS)
+                                          COLD_START_PRETRAIN_UPDATES, DEFAULT_MAX_TURNS, COLD_START_DEMONSTRATOR)
     if COLD_START_ENABLED and COLD_START_GAMES > 0:
         t_demo = time.perf_counter()
         agent1.enable_demonstrations(COLD_START_DEMO_CAPACITY)
         demo = record_demonstrations(
-            agent1, HeuristicOpponent(device=device, player_id=1),
+            agent1, (OutlookExpert(torch.device('cpu'), player_id=1) if COLD_START_DEMONSTRATOR == 'expert'
+                     else HeuristicOpponent(device=device, player_id=1)),
             [make_eval_opponent('random'), make_eval_opponent('heuristic')], COLD_START_GAMES, device,
             make_shaper=lambda: create_unified_reward_shaper(player_id=1, config=master_reward_config),
             max_turns=DEFAULT_MAX_TURNS)
-        print(f"[COLD START] {demo['games']} heuristic games ({demo['wins']}W/{demo['losses']}L/{demo['draws']}D): "
+        print(f"[COLD START] {demo['games']} {COLD_START_DEMONSTRATOR} games ({demo['wins']}W/{demo['losses']}L/{demo['draws']}D): "
               f"{demo['transitions']} demonstration transitions [{time.perf_counter() - t_demo:.0f}s]")
         if start_episode == 0:  # a resumed network has been pre-trained already
             t_pre, pre_losses = time.perf_counter(), []
@@ -484,7 +494,7 @@ def train_dqn_agents(num_episodes: int = 1000, save_interval: int = 100,
                                      'pretrain_loss_first': pre_losses[:50], 'pretrain_loss_last': pre_losses[-50:]}
             if pre_losses:
                 print(f"[COLD START] {len(pre_losses)} pre-training updates, loss {np.mean(pre_losses[:50]):.3f} -> "
-                      f"{np.mean(pre_losses[-50:]):.3f}, margin loss {agent1.last_margin_loss:.3f} "
+                      f"{np.mean(pre_losses[-50:]):.3f}, margin loss {agent1.last_margin_loss:.3f}, bc loss {agent1.last_bc_loss:.3f} "
                       f"[{time.perf_counter() - t_pre:.0f}s]")
 
     # --- ASYNCHRONOUS LEARNER: agent1's updates on a background thread ---

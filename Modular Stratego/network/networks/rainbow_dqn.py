@@ -151,8 +151,9 @@ class RainbowDQN(nn.Module):
         self.res_blocks = nn.ModuleList([ResidualBlock(channels) for _ in range(res_blocks)])
         
         # Spatial Self-Attention for global board reasoning
-        # Applied AFTER ResBlocks to capture long-range piece relationships
-        self.spatial_attention = SpatialAttention(channels=channels, num_heads=attention_heads, dropout=0.1)
+        # Applied AFTER ResBlocks to capture long-range piece relationships. No dropout: the online
+        # network stays in train mode during replay (for its noise), so dropout jittered every target.
+        self.spatial_attention = SpatialAttention(channels=channels, num_heads=attention_heads, dropout=0.0)
         
         # Value Head
         # (channels, 10, 10) -> (1, 10, 10) -> Flatten -> 100 -> NoisyLinear

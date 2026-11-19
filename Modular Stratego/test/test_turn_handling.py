@@ -80,7 +80,7 @@ def test_stored_transitions_hold_the_agents_own_view_and_one_terminal_per_game(t
         if self.player_id == 1:
             for gs, ngs, r, d, lane, info in zip(game_states, next_game_states, rewards, dones, kwargs['lane_ids'], infos):
                 stored.append((gs.current_player, ngs.current_player, ngs.game_over, r, d, lane,
-                               compute_potential(gs.board, 1), ngs.winner, info.get('win_type')))
+                               compute_potential(gs.board, 1, gs.hidden_pool), ngs.winner, info.get('win_type')))
         return original(self, states, actions, rewards, next_states, dones, active_mask, game_states,
                         next_game_states, infos, **kwargs)
 
@@ -191,7 +191,8 @@ def test_opponent_moves_update_the_lanes_own_history(cpu, tiny_network, config_o
     sums = [h.get_embedding_tensor().abs().sum().item() for h in agent.history_instances]
     assert sums[0] == 0 and sums[1] == 0 and sums[2] > 0
     x = agent.get_batch_state_representation([state.board], [state], env_indices=[2])
-    assert x[0, 32:].abs().sum() > 0  # the AAREN planes after the 32 observation planes
+    from environment.observation import NUM_OBS_PLANES
+    assert x[0, NUM_OBS_PLANES:].abs().sum() > 0  # the AAREN planes after the observation planes
 
 
 def test_self_play_stores_the_opponents_own_view(tmp_path, config_override, monkeypatch):

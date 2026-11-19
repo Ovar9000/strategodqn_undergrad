@@ -15,7 +15,7 @@ from environment import StrategoEnvironment
 from environment.board import HIDDEN_PIECE, LAKE_SQUARE
 from environment.piece import PieceType
 
-OBS_PLANES = 32
+from environment.observation import NUM_OBS_PLANES as OBS_PLANES
 NUM_ACTIONS = 3600
 ENEMY_MOVE = ((6, 0), (5, 0))  # treated as an opponent move by the aggregator
 LAKES = [(4, 2), (4, 3), (5, 2), (5, 3), (4, 6), (4, 7), (5, 6), (5, 7)]

@@ -39,9 +39,9 @@ def smart_heuristic_setup(pieces: List[PieceType],
         'miners': [p for p in pieces if p == PieceType.MINER],
         'scouts': [p for p in pieces if p == PieceType.SCOUT],
         'spy': [p for p in pieces if p == PieceType.SPY],
-        'high_value': [p for p in pieces if p.value in [7, 8]],  # Colonel, Major
-        'mid_value': [p for p in pieces if p.value in [5, 6]],   # Captain, Lieutenant
-        'low_value': [p for p in pieces if p.value in [4]],      # Sergeant
+        'high_value': [p for p in pieces if p in (PieceType.COLONEL, PieceType.MAJOR)],
+        'mid_value': [p for p in pieces if p in (PieceType.CAPTAIN, PieceType.LIEUTENANT)],
+        'low_value': [p for p in pieces if p == PieceType.SERGEANT],
     }
     
     # Determine back and front rows based on player
@@ -168,13 +168,6 @@ def smart_heuristic_setup(pieces: List[PieceType],
             place_piece(piece, pos)
     
     # 8. Fill remaining pieces randomly
-    remaining_pieces = []
-    for p in pieces:
-        already_placed = any(placed_piece == p for placed_piece, _ in placement)
-        if not already_placed:
-            remaining_pieces.append(p)
-    
-    # Actually, we need to track which pieces we've placed
     placed_pieces = [pp for pp, _ in placement]
     remaining_to_place = pieces.copy()
     for pp in placed_pieces:

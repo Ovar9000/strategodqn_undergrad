@@ -1,5 +1,5 @@
 """
-Observation planes: what one side can see, as a (32, 10, 10) float tensor in that side's
+Observation planes: what one side can see, as a (41, 10, 10) float tensor in that side's
 canonical frame (Player 2's board rotated 180 degrees, see action_encoding.py), so one network
 can play either side and its action indices line up with the squares.
 
@@ -15,6 +15,9 @@ can play either side and its action indices line up with the squares.
     29     game progress: turns played / turn limit (0 if unknown)
     30     enemy pieces of unknown rank that have moved (so not a Bomb or the Flag)
     31     enemy pieces of unknown rank that have moved more than one square at once (Scouts)
+    32-35  battle outlook: for each own piece, P(win) of attacking up / down / left / right
+    36-39  battle outlook: P(lose) of the same attacks (environment/battle_outlook.py)
+    40     threat: largest P(an adjacent enemy piece beats this own piece if it attacks)
 
 Empty squares are the squares with no plane set. The thesis encoding had 15 planes: own pieces
 by rank, one plane for every enemy piece (ranks dropped, even revealed ones and even under full
@@ -30,6 +33,7 @@ import torch
 
 from environment.action_encoding import BOARD_SIZE, is_first_player
 from environment.board import HIDDEN_PIECE, LAKE_SQUARE
+from environment.battle_outlook import NUM_OUTLOOK_PLANES, outlook_planes
 
 NUM_RANKS = 12
 CH_OWN = 0
@@ -42,7 +46,8 @@ CH_NO_BATTLE = 28
 CH_PROGRESS = 29
 CH_ENEMY_MOVED = 30
 CH_ENEMY_LONG_MOVED = 31
-NUM_OBS_PLANES = 32
+CH_OUTLOOK = 32
+NUM_OBS_PLANES = 32 + NUM_OUTLOOK_PLANES  # 41
 
 
 def _board_tensor(item, device) -> torch.Tensor:
@@ -112,6 +117,8 @@ def encode_observations(items: Sequence, players, device=None) -> torch.Tensor:
     second = (sign.view(n) < 0)
     if second.any():
         obs[second] = obs[second].flip(-2, -1)  # rotate Player 2's view by 180 degrees
+    # Battle outlook, computed in the canonical frame (its directions are the action encoding's)
+    obs[:, CH_OUTLOOK:] = outlook_planes(obs, [getattr(it, 'hidden_pool', None) for it in items])
     return obs
 
 
