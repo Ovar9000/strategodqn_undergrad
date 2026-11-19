@@ -1,0 +1,73 @@
+"""Supervised belief memory probe package (`vec.memory`) for Task A2."""
+
+from vec.memory.features import (
+    EVENT_DIM,
+    EVENT_FEATURE_NAMES,
+    HISTORY_PLANE_NAMES,
+    MATCHUP_KIND_NAMES,
+    MAX_EVENTS,
+    NUM_HISTORY_PLANES,
+    SETUP_KIND_NAMES,
+    PieceHistoryTracker,
+    extract_batch_sequences,
+    scatter_history_planes,
+)
+from vec.memory.models import (
+    MODEL_KINDS,
+    BaselineBeliefNet,
+    HistoryPlanesBeliefNet,
+    PieceAarenEncoder,
+    PieceGruEncoder,
+    ResNetBeliefTrunk,
+    SequenceBeliefNet,
+    build_model,
+)
+from vec.memory.recorder import (
+    labeled_diverse_setup_bank,
+    load_dataset,
+    load_experts,
+    record_dataset,
+    save_dataset,
+)
+from vec.memory.probe import (
+    binary_roc_auc,
+    compute_deltas_and_decision,
+    evaluate_model,
+    evaluate_public_baseline,
+    run_probe,
+    split_by_game_id,
+    train_belief_model,
+)
+
+__all__ = [
+    'EVENT_DIM',
+    'EVENT_FEATURE_NAMES',
+    'HISTORY_PLANE_NAMES',
+    'MATCHUP_KIND_NAMES',
+    'MAX_EVENTS',
+    'NUM_HISTORY_PLANES',
+    'SETUP_KIND_NAMES',
+    'PieceHistoryTracker',
+    'extract_batch_sequences',
+    'scatter_history_planes',
+    'MODEL_KINDS',
+    'BaselineBeliefNet',
+    'HistoryPlanesBeliefNet',
+    'PieceAarenEncoder',
+    'PieceGruEncoder',
+    'ResNetBeliefTrunk',
+    'SequenceBeliefNet',
+    'build_model',
+    'labeled_diverse_setup_bank',
+    'load_dataset',
+    'load_experts',
+    'record_dataset',
+    'save_dataset',
+    'binary_roc_auc',
+    'compute_deltas_and_decision',
+    'evaluate_model',
+    'evaluate_public_baseline',
+    'run_probe',
+    'split_by_game_id',
+    'train_belief_model',
+]
