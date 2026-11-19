@@ -1,0 +1,1222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MARQ Stratego — Replay &amp; Blunder Inspector</title>
+<meta name="description" content="Step through recorded Stratego games with fog-of-war views, policy top-5 probabilities, value curve, belief overlays, and sure-loss blunder jumps.">
+<style>
+:root {
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --surface-2: #efece4;
+  --text: #1f2328;
+  --muted: #5f6670;
+  --border: #d9d4c7;
+  --accent: #2f6fb3;
+  --board-light: #d9c79a;
+  --board-dark: #cdb984;
+  --lake: #6e9fc6;
+  --lake-edge: #5b8db5;
+  --me: #b8322a;
+  --me-text: #ffffff;
+  --bot: #2b5c96;
+  --bot-text: #ffffff;
+  --select: #f2c94c;
+  --last: rgba(242, 201, 76, 0.55);
+  --blunder: #d62728;
+  --blunder-bg: rgba(214, 39, 40, 0.14);
+  --blunder-sq: rgba(214, 39, 40, 0.45);
+  --win: #2e7d32;
+  --lose: #b8322a;
+  --warn: #c47a00;
+  --shadow: 0 1px 2px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171a;
+    --surface: #1e2125;
+    --surface-2: #262a2f;
+    --text: #e8e6e1;
+    --muted: #a0a6ad;
+    --border: #353a40;
+    --accent: #6ea8e6;
+    --board-light: #8c7a52;
+    --board-dark: #81704a;
+    --lake: #3b6488;
+    --lake-edge: #33597a;
+    --me: #c9473e;
+    --bot: #3d74b3;
+    --select: #e0b83f;
+    --last: rgba(224, 184, 63, 0.45);
+    --blunder: #ff5252;
+    --blunder-bg: rgba(255, 82, 82, 0.16);
+    --blunder-sq: rgba(255, 82, 82, 0.42);
+    --win: #66bb6a;
+    --lose: #ef6b62;
+    --warn: #f0ad4e;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.wrap { max-width: 1220px; margin: 0 auto; padding: 18px 16px 40px; }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 14px; }
+.title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
+.sub { color: var(--muted); font-size: 13.5px; }
+.load-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 18px; align-items: start; }
+@media (max-width: 960px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+.board-card, .card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow);
+}
+.card h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+
+.error-banner {
+  display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px;
+  background: var(--blunder-bg); border: 1px solid var(--blunder); color: var(--blunder);
+  font-size: 13.5px; font-weight: 600;
+}
+.error-banner.show { display: block; }
+
+.status { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; min-height: 28px; }
+.status .msg { font-weight: 600; font-size: 14.5px; }
+.status .msg.blunder { color: var(--blunder); }
+.status .msg.win { color: var(--win); }
+.status .counters { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.battle-banner {
+  display: none; margin-bottom: 8px; padding: 7px 10px; border-radius: 7px; font-size: 13px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.battle-banner.show { display: block; }
+.battle-banner.blunder { background: var(--blunder-bg); border-color: var(--blunder); }
+.badge {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px;
+  border-radius: 4px; vertical-align: middle; margin-right: 6px; letter-spacing: .3px;
+}
+.badge.red { background: var(--blunder); color: #fff; }
+.badge.warn { background: var(--warn); color: #fff; }
+.badge.ok { background: var(--win); color: #fff; }
+
+.board-shell { position: relative; max-width: 620px; margin: 0 auto; }
+.board {
+  display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px;
+  width: 100%; aspect-ratio: 1;
+  background: var(--border); border: 2px solid var(--border); border-radius: 6px; overflow: hidden;
+  user-select: none;
+}
+.sq {
+  position: relative; border: 0; padding: 0; margin: 0; background: var(--board-light);
+  display: flex; align-items: center; justify-content: center; font: inherit; color: inherit;
+  cursor: pointer;
+}
+.sq.alt { background: var(--board-dark); }
+.sq.lake { background: var(--lake); box-shadow: inset 0 0 0 1px var(--lake-edge); cursor: default; }
+.sq.last::after { content: ""; position: absolute; inset: 0; background: var(--last); pointer-events: none; z-index: 0; }
+.sq.blunder-sq::after { content: ""; position: absolute; inset: 0; background: var(--blunder-sq); pointer-events: none; z-index: 0; }
+.sq.inspected { box-shadow: inset 0 0 0 3px var(--select); }
+.sq-coord {
+  position: absolute; top: 1px; left: 2px; font-size: 8px; opacity: .5;
+  pointer-events: none; line-height: 1; z-index: 0;
+}
+
+.piece {
+  position: relative; z-index: 1; width: 84%; height: 84%; border-radius: 6px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-weight: 700; font-size: clamp(11px, 2.3vw, 19px); line-height: 1; box-shadow: var(--shadow);
+}
+.piece small { font-size: clamp(7px, 1.1vw, 9.5px); font-weight: 600; opacity: .88; margin-top: 2px; letter-spacing: .2px; }
+.piece.red { background: var(--me); color: var(--me-text); }
+.piece.blue { background: var(--bot); color: var(--bot-text); }
+.piece.hidden.red {
+  background: repeating-linear-gradient(45deg, var(--me), var(--me) 6px, color-mix(in srgb, var(--me) 78%, #000) 6px, color-mix(in srgb, var(--me) 78%, #000) 12px);
+}
+.piece.hidden.blue {
+  background: repeating-linear-gradient(45deg, var(--bot), var(--bot) 6px, color-mix(in srgb, var(--bot) 78%, #000) 6px, color-mix(in srgb, var(--bot) 78%, #000) 12px);
+}
+.piece.revealed-mark { outline: 2px dashed rgba(255, 255, 255, .82); outline-offset: -3px; }
+.piece.moved-dot::before {
+  content: ""; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px;
+  border-radius: 50%; background: rgba(255, 255, 255, .75);
+}
+
+.belief-tag {
+  position: absolute; bottom: 1px; right: 1px; left: 1px; z-index: 2;
+  font-size: clamp(7px, 1.05vw, 9.5px); font-weight: 700; line-height: 1.15;
+  text-align: center; border-radius: 3px; padding: 1px 2px;
+  background: rgba(15, 20, 26, 0.82); color: #fff; pointer-events: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.belief-tag.hit { background: rgba(34, 130, 52, 0.9); }
+.belief-tag.miss { background: rgba(185, 88, 12, 0.9); }
+
+.controls { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.row.spread { justify-content: space-between; }
+
+button.btn, label.btn {
+  font: inherit; font-size: 13.5px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  padding: 6px 10px; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+}
+button.btn:hover:not(:disabled), label.btn:hover { border-color: var(--accent); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.danger { border-color: var(--blunder); color: var(--blunder); }
+button.btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn:disabled { opacity: .45; cursor: not-allowed; }
+label.btn input { display: none; }
+select {
+  font: inherit; font-size: 13.5px; padding: 5px 8px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+
+.scrubber-wrap { display: flex; flex-direction: column; gap: 3px; }
+.scrubber { width: 100%; accent-color: var(--accent); cursor: pointer; margin: 0; }
+.tick-track {
+  position: relative; height: 8px; background: var(--surface-2); border-radius: 4px;
+  border: 1px solid var(--border); overflow: hidden;
+}
+.tick { position: absolute; top: 0; bottom: 0; width: 2px; pointer-events: none; }
+.tick.battle { background: rgba(196, 122, 0, 0.65); }
+.tick.blunder { background: var(--blunder); width: 3px; z-index: 2; }
+.tick.cursor { background: var(--accent); width: 3px; z-index: 3; }
+
+.cap-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.cap-box { background: var(--surface-2); border-radius: 7px; padding: 6px 8px; }
+.cap-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+.captured { display: flex; flex-wrap: wrap; gap: 3px; min-height: 22px; }
+.chip { font-size: 11.5px; font-weight: 700; padding: 2px 5px; border-radius: 4px; }
+.chip.red { background: var(--me); color: var(--me-text); }
+.chip.blue { background: var(--bot); color: var(--bot-text); }
+
+.panel { display: flex; flex-direction: column; gap: 12px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+.blunder-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.ply-chip {
+  font-size: 12px; font-weight: 600; padding: 3px 7px; border-radius: 5px;
+  border: 1px solid var(--blunder); background: var(--blunder-bg); color: var(--blunder); cursor: pointer;
+}
+.ply-chip:hover { background: var(--blunder); color: #fff; }
+
+.prob-list { list-style: none; margin: 0; padding: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.prob-list li { padding: 5px 6px; border-bottom: 1px solid var(--border); border-radius: 5px; }
+.prob-list li:last-child { border-bottom: 0; }
+.prob-list li.played { background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 700; }
+.prob-list li.played.blunder { background: var(--blunder-bg); color: var(--blunder); }
+.prob-head { display: flex; justify-content: space-between; gap: 8px; }
+.bar-bg { height: 5px; background: var(--surface-2); border-radius: 3px; margin-top: 3px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.prob-list li.played.blunder .bar-fill { background: var(--blunder); }
+
+.val-chart {
+  width: 100%; height: 130px; display: block; cursor: crosshair;
+  background: var(--surface-2); border-radius: 7px; border: 1px solid var(--border);
+}
+.val-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+.belief-bars { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.belief-bars li { display: grid; grid-template-columns: 78px 1fr 44px; align-items: center; gap: 6px; margin: 3px 0; }
+.belief-bars li.true-row { font-weight: 700; color: var(--win); }
+
+.move-log {
+  max-height: 210px; overflow: auto; font-size: 12.5px; margin: 0; padding: 0;
+  list-style: none; font-variant-numeric: tabular-nums;
+}
+.move-log li {
+  display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px;
+  border-radius: 4px; cursor: pointer;
+}
+.move-log li:hover { background: var(--surface-2); }
+.move-log li.cur { background: color-mix(in srgb, var(--accent) 18%, transparent); font-weight: 700; }
+.move-log li.blunder { color: var(--blunder); }
+
+.drop-overlay {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  background: rgba(47, 111, 179, 0.22); backdrop-filter: blur(2px); z-index: 100;
+  border: 4px dashed var(--accent); font-size: 22px; font-weight: 700; color: var(--text);
+}
+.drop-overlay.show { display: flex; }
+.legend { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.hint { font-size: 12.5px; color: var(--muted); margin: 4px 0 0; }
+</style>
+</head>
+<body>
+<div class="drop-overlay" id="dropOverlay">Drop Stratego replay .json to inspect</div>
+
+<div class="wrap">
+  <header>
+    <div class="title-row">
+      <h1>Stratego Replay Inspector</h1>
+      <span class="sub">Inspect recorded <code>ppo_4</code> games or games downloaded from <a href="play.html">play.html</a>.</span>
+    </div>
+    <div class="load-bar">
+      <label class="btn primary">Open replay .json <input type="file" id="fileInput" accept=".json,application/json"></label>
+      <select id="presetSelect" style="display:none" aria-label="Recorded replays">
+        <option value="">Select recorded game…</option>
+      </select>
+    </div>
+  </header>
+
+  <div class="error-banner" id="errorBanner" role="alert"></div>
+
+  <div class="layout">
+    <section class="board-card" aria-label="Replay board">
+      <div class="status">
+        <span class="msg" id="statusMsg">Load a replay JSON file (or drag &amp; drop anywhere on this page).</span>
+        <span class="counters" id="counters"></span>
+      </div>
+      <div class="battle-banner" id="battleBanner"></div>
+
+      <div class="board-shell">
+        <div class="board" id="board" role="grid" aria-label="Stratego board"></div>
+      </div>
+
+      <div class="controls">
+        <div class="scrubber-wrap">
+          <input type="range" class="scrubber" id="scrubber" min="0" max="0" value="0" disabled aria-label="Ply scrubber">
+          <div class="tick-track" id="tickTrack" title="Amber = battle, Red = sure-loss blunder"></div>
+        </div>
+
+        <div class="row spread">
+          <div class="row">
+            <button class="btn" id="btnStart" title="Start (Home)" disabled>|&lt;</button>
+            <button class="btn" id="btnPrev" title="Previous ply (Left arrow)" disabled>&lt;</button>
+            <button class="btn primary" id="btnPlay" title="Play / Pause (Space)" disabled>Play</button>
+            <button class="btn" id="btnNext" title="Next ply (Right arrow)" disabled>&gt;</button>
+            <button class="btn" id="btnEnd" title="End (End)" disabled>&gt;|</button>
+            <select id="speedSel" aria-label="Playback speed">
+              <option value="1000">0.5x</option>
+              <option value="500" selected>1x</option>
+              <option value="250">2x</option>
+              <option value="110">4x</option>
+            </select>
+          </div>
+          <div class="row">
+            <button class="btn" id="btnPrevBattle" title="Previous battle (Shift+B)" disabled>&lt; Battle</button>
+            <button class="btn" id="btnNextBattle" title="Next battle (B)" disabled>Battle &gt;</button>
+            <button class="btn danger" id="btnPrevBlunder" title="Previous blunder (Shift+X)" disabled>&lt; Blunder</button>
+            <button class="btn danger" id="btnNextBlunder" title="Next blunder (X)" disabled>Blunder &gt;</button>
+          </div>
+        </div>
+
+        <div class="row spread">
+          <div class="row" role="group" aria-label="View mode">
+            <button class="btn active" id="viewFull" data-view="full">Fully revealed</button>
+            <button class="btn" id="viewRed" data-view="red">Red's view (fog)</button>
+            <button class="btn" id="viewBlue" data-view="blue">Blue's view (fog)</button>
+          </div>
+          <div class="row">
+            <label class="toggle"><input type="checkbox" id="chkFlip"> Flip board</label>
+            <label class="toggle"><input type="checkbox" id="chkBelief" checked> Belief overlay</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="cap-row">
+        <div class="cap-box">
+          <div class="cap-label">Blue pieces captured</div>
+          <div class="captured" id="capBlue"></div>
+        </div>
+        <div class="cap-box">
+          <div class="cap-label">Red pieces captured</div>
+          <div class="captured" id="capRed"></div>
+        </div>
+      </div>
+
+      <p class="legend">
+        Keys: <code>←</code>/<code>→</code> step · <code>Space</code> play/pause · <code>B</code> battle · <code>X</code> blunder · <code>Home</code>/<code>End</code>.
+        Dashed outline = revealed to opponent. Dot = moved piece. Hover or click a hidden enemy piece to inspect beliefs.
+      </p>
+    </section>
+
+    <aside class="panel">
+      <div class="card">
+        <h2>Game Info <span id="blunderBadge"></span></h2>
+        <dl class="kv" id="metaKv">
+          <dt>Status</dt><dd>No replay loaded</dd>
+        </dl>
+        <div class="blunder-chips" id="blunderChips"></div>
+      </div>
+
+      <div class="card">
+        <h2>Top-5 Move Probabilities <span id="top5Tag" style="font-weight:600;text-transform:none"></span></h2>
+        <ul class="prob-list" id="top5List"><li>No game loaded.</li></ul>
+      </div>
+
+      <div class="card">
+        <h2>Value Curve (Red +1 / Blue -1) <span id="valNow" style="font-weight:600"></span></h2>
+        <svg class="val-chart" id="valSvg" viewBox="0 0 360 130" preserveAspectRatio="none" aria-label="Value curve"></svg>
+        <div class="val-meta">
+          <span id="valHover">Click or drag chart to seek</span>
+          <span id="valRange">Red +1 / Blue -1</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Belief Inspector <span id="beliefAcc" style="font-weight:600;text-transform:none"></span></h2>
+        <div id="beliefBody" class="hint">Hover or click a hidden enemy square to inspect rank probabilities.</div>
+      </div>
+
+      <div class="card">
+        <h2>Move History <span id="logCount" style="font-weight:600"></span></h2>
+        <ul class="move-log" id="moveLog"></ul>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- Pure replay state engine: also testable in Node -->
+<script id="replay-core">
+(function (root) {
+  'use strict';
+  var N = 10, EMPTY = 0, LAKE = -13;
+  var P = { FLAG: 1, SPY: 2, SCOUT: 3, MINER: 4, SERGEANT: 5, LIEUTENANT: 6, CAPTAIN: 7,
+            MAJOR: 8, COLONEL: 9, GENERAL: 10, MARSHAL: 11, BOMB: 12 };
+  var NAMES = { 1: 'Flag', 2: 'Spy', 3: 'Scout', 4: 'Miner', 5: 'Sergeant', 6: 'Lieutenant',
+                7: 'Captain', 8: 'Major', 9: 'Colonel', 10: 'General', 11: 'Marshal', 12: 'Bomb' };
+  var LABELS = { 1: 'F', 2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: 'M', 12: 'B' };
+  var LAKES = [42, 43, 52, 53, 46, 47, 56, 57];
+
+  function battle(att, def) {
+    if (att === P.SPY && def === P.MARSHAL) return 1;
+    if (att === P.MINER && def === P.BOMB) return 1;
+    if (att !== P.MINER && def === P.BOMB) return -1;
+    if (att === P.BOMB && def !== P.MINER) return -1;
+    return att > def ? 1 : (def > att ? -1 : 0);
+  }
+
+  function normSq(v) {
+    if (typeof v === 'number') return v;
+    if (Array.isArray(v) && v.length === 2) return v[0] * N + v[1];
+    return -1;
+  }
+
+  function sqName(sq) {
+    var r = Math.floor(sq / N), c = sq % N;
+    return 'abcdefghij'[c] + (N - r);
+  }
+
+  function validateReplay(data) {
+    if (!data || typeof data !== 'object') return 'File does not contain a JSON object.';
+    if (!data.setups || !Array.isArray(data.setups.red) || !Array.isArray(data.setups.blue)) {
+      return 'Missing setups.red or setups.blue arrays.';
+    }
+    if (data.setups.red.length !== 40 || data.setups.blue.length !== 40) {
+      return 'setups.red and setups.blue must each contain 40 ranks.';
+    }
+    if (!Array.isArray(data.plies)) return 'Missing plies array.';
+    return null;
+  }
+
+  function buildStates(data) {
+    var err = validateReplay(data);
+    if (err) throw new Error(err);
+
+    var board = new Int8Array(100);
+    var revRed = new Uint8Array(100);   // Blue pieces known to Red
+    var revBlue = new Uint8Array(100);  // Red pieces known to Blue
+    var moved = new Uint8Array(100);
+    var longMoved = new Uint8Array(100);
+    var i;
+    for (i = 0; i < LAKES.length; i++) board[LAKES[i]] = LAKE;
+    for (i = 0; i < 40; i++) {
+      board[i] = -Math.abs(data.setups.blue[i]);
+      board[60 + i] = Math.abs(data.setups.red[i]);
+    }
+
+    var states = [];
+    var battles = [];
+    var blunders = [];
+    var allSureLosses = [];
+    var values = []; // { step, redVal, rawVal, side }
+
+    function snap(nb, capRed, capBlue) {
+      var rc = 0, bc = 0;
+      for (var k = 0; k < 100; k++) {
+        if (board[k] > 0) rc++;
+        else if (board[k] < 0 && board[k] !== LAKE) bc++;
+      }
+      return {
+        board: board.slice(),
+        revRed: revRed.slice(),
+        revBlue: revBlue.slice(),
+        moved: moved.slice(),
+        longMoved: longMoved.slice(),
+        capRed: capRed.slice(),
+        capBlue: capBlue.slice(),
+        nb: nb,
+        redCount: rc,
+        blueCount: bc
+      };
+    }
+
+    var nb = 0, capRed = [], capBlue = [];
+    states.push(snap(nb, capRed, capBlue));
+
+    for (var idx = 0; idx < data.plies.length; idx++) {
+      var p = data.plies[idx];
+      var side = p.side;
+      var src = normSq(p.move[0]), dst = normSq(p.move[1]);
+      var mover = board[src], target = board[dst];
+      var isLong = Math.abs(Math.floor(dst / N) - Math.floor(src / N)) + Math.abs((dst % N) - (src % N)) > 1;
+
+      if (p.value !== null && p.value !== undefined && isFinite(p.value)) {
+        values.push({ step: idx + 1, redVal: side === 1 ? p.value : -p.value, rawVal: p.value, side: side });
+      }
+      if (p.sure_loss) allSureLosses.push(idx + 1);
+      if (p.sure_loss_non_scout) blunders.push(idx + 1);
+
+      if (target !== EMPTY && target !== LAKE) {
+        battles.push(idx + 1);
+        nb = 0;
+        var att = Math.abs(mover), def = Math.abs(target);
+        var res = (p.battle && typeof p.battle.result === 'number') ? p.battle.result : battle(att, def);
+        if (res === 1) {
+          board[dst] = mover; board[src] = EMPTY;
+          moved[dst] = 1; longMoved[dst] = (longMoved[src] || isLong) ? 1 : 0;
+          moved[src] = 0; longMoved[src] = 0;
+          if (side === 1) { revBlue[dst] = 1; revBlue[src] = 0; revRed[dst] = 0; capBlue.push(def); }
+          else { revRed[dst] = 1; revRed[src] = 0; revBlue[dst] = 0; capRed.push(def); }
+        } else if (res === -1) {
+          board[src] = EMPTY; moved[src] = 0; longMoved[src] = 0;
+          revRed[src] = 0; revBlue[src] = 0;
+          if (side === 1) { revRed[dst] = 1; capRed.push(att); }
+          else { revBlue[dst] = 1; capBlue.push(att); }
+        } else {
+          board[src] = EMPTY; board[dst] = EMPTY;
+          moved[src] = moved[dst] = longMoved[src] = longMoved[dst] = 0;
+          revRed[src] = revRed[dst] = revBlue[src] = revBlue[dst] = 0;
+          if (side === 1) { capRed.push(att); capBlue.push(def); }
+          else { capBlue.push(att); capRed.push(def); }
+        }
+      } else {
+        nb += 1;
+        board[dst] = mover; board[src] = EMPTY;
+        moved[dst] = 1; longMoved[dst] = (longMoved[src] || isLong) ? 1 : 0;
+        moved[src] = 0; longMoved[src] = 0;
+        if (side === 1) { revBlue[dst] = revBlue[src]; revBlue[src] = 0; }
+        else { revRed[dst] = revRed[src]; revRed[src] = 0; }
+      }
+      states.push(snap(nb, capRed, capBlue));
+    }
+
+    return {
+      states: states,
+      battles: battles,
+      blunders: blunders,
+      allSureLosses: allSureLosses,
+      values: values
+    };
+  }
+
+  root.StrategoReplayCore = {
+    N: N, EMPTY: EMPTY, LAKE: LAKE, P: P, NAMES: NAMES, LABELS: LABELS, LAKES: LAKES,
+    battle: battle, normSq: normSq, sqName: sqName, validateReplay: validateReplay, buildStates: buildStates
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+
+<script>
+(function () {
+  'use strict';
+  var C = window.StrategoReplayCore, N = C.N;
+  var $ = function (id) { return document.getElementById(id); };
+
+  var replay = null, parsed = null, step = 0, viewMode = 'full', flipBoard = false;
+  var timer = null, pinnedSq = null, hoveredSq = null, activeBelief = null, activeBeliefLabel = '';
+
+  // Build 100 board squares
+  var boardEl = $('board'), sqEls = [];
+  for (var i = 0; i < 100; i++) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sq';
+    b.dataset.visIdx = i;
+    b.setAttribute('role', 'gridcell');
+    b.addEventListener('mouseenter', onSqEnter);
+    b.addEventListener('mouseleave', onSqLeave);
+    b.addEventListener('click', onSqClick);
+    boardEl.appendChild(b);
+    sqEls.push(b);
+  }
+
+  function showError(msg) {
+    var el = $('errorBanner');
+    if (!msg) { el.className = 'error-banner'; el.textContent = ''; return; }
+    el.textContent = msg;
+    el.className = 'error-banner show';
+  }
+
+  function sideLabel(s) { return s === 1 ? 'Red' : (s === -1 ? 'Blue' : 'Draw'); }
+  function endLabel(e) {
+    return { flag: 'Flag capture', flag_capture: 'Flag capture', no_moves: 'No legal moves',
+             no_battle: 'No-battle draw', no_battle_draw: 'No-battle draw',
+             turn_limit: 'Turn limit', timeout: 'Turn limit', in_progress: 'In progress' }[e] || (e || '–');
+  }
+
+  function stopPlay() {
+    if (timer) { clearInterval(timer); timer = null; }
+    $('btnPlay').textContent = 'Play';
+  }
+
+  function togglePlay() {
+    if (!replay) return;
+    if (timer) { stopPlay(); return; }
+    if (step >= replay.plies.length) setStep(0);
+    var ms = Number($('speedSel').value) || 500;
+    $('btnPlay').textContent = 'Pause';
+    timer = setInterval(function () {
+      if (step < replay.plies.length) setStep(step + 1);
+      else stopPlay();
+    }, ms);
+  }
+
+  function loadReplayObject(data, sourceLabel) {
+    stopPlay();
+    showError(null);
+    try {
+      parsed = C.buildStates(data);
+    } catch (e) {
+      showError('Could not load replay' + (sourceLabel ? ' (' + sourceLabel + ')' : '') + ': ' + e.message);
+      return;
+    }
+    replay = data;
+    pinnedSq = null; hoveredSq = null;
+    var n = replay.plies.length;
+    var sc = $('scrubber');
+    sc.disabled = false; sc.min = 0; sc.max = n; sc.value = 0;
+    ['btnStart', 'btnPrev', 'btnPlay', 'btnNext', 'btnEnd'].forEach(function (id) { $(id).disabled = false; });
+    $('btnPrevBattle').disabled = parsed.battles.length === 0;
+    $('btnNextBattle').disabled = parsed.battles.length === 0;
+    var jumpBlunders = parsed.blunders.length ? parsed.blunders : parsed.allSureLosses;
+    $('btnPrevBlunder').disabled = jumpBlunders.length === 0;
+    $('btnNextBlunder').disabled = jumpBlunders.length === 0;
+
+    renderMeta(sourceLabel);
+    renderMoveLog();
+    renderTicks();
+    renderValueChart();
+    setStep(0);
+  }
+
+  function loadReplayText(text, sourceLabel) {
+    try {
+      var data = JSON.parse(text);
+      loadReplayObject(data, sourceLabel);
+    } catch (e) {
+      showError('Invalid JSON' + (sourceLabel ? ' in ' + sourceLabel : '') + ': ' + e.message);
+    }
+  }
+
+  function setStep(k) {
+    if (!replay) return;
+    step = Math.max(0, Math.min(replay.plies.length, k));
+    $('scrubber').value = step;
+    renderBoard();
+    renderTop5();
+    renderBeliefInspector(pinnedSq !== null ? pinnedSq : hoveredSq);
+    updateValueCursor();
+    updateTicksCursor();
+    highlightLogRow();
+  }
+
+  function jumpList(list, dir) {
+    if (!list || !list.length) return;
+    stopPlay();
+    if (dir > 0) {
+      for (var i = 0; i < list.length; i++) if (list[i] > step) { setStep(list[i]); return; }
+      setStep(list[0]);
+    } else {
+      for (var j = list.length - 1; j >= 0; j--) if (list[j] < step) { setStep(list[j]); return; }
+      setStep(list[list.length - 1]);
+    }
+  }
+
+  function currentBeliefSource() {
+    if (!replay) return { belief: null, side: 0, label: '' };
+    var plies = replay.plies;
+    if (step < plies.length && plies[step].belief) {
+      return {
+        belief: plies[step].belief,
+        side: plies[step].side,
+        label: sideLabel(plies[step].side) + ' before Ply ' + (step + 1)
+      };
+    }
+    if (step > 0 && plies[step - 1].belief) {
+      return {
+        belief: plies[step - 1].belief,
+        side: plies[step - 1].side,
+        label: sideLabel(plies[step - 1].side) + ' at Ply ' + step
+      };
+    }
+    return { belief: null, side: 0, label: '' };
+  }
+
+  function renderMeta(sourceLabel) {
+    var m = replay.meta || {};
+    var kv = $('metaKv');
+    var winText = m.winner === 1 ? 'Red (' + (m.red || 'Red') + ') wins'
+                : m.winner === -1 ? 'Blue (' + (m.blue || 'Blue') + ') wins'
+                : m.winner === 0 ? 'Draw' : 'In progress';
+    var rows = [
+      ['Matchup', (m.red || 'Red') + ' (Red) vs ' + (m.blue || 'Blue') + ' (Blue)'],
+      ['Result', winText + ' — ' + endLabel(m.end_type)],
+      ['Plies', replay.plies.length + ' (' + parsed.battles.length + ' battles)'],
+      ['Model', m.model || '–'],
+      ['Settings', 'T=' + (m.temperature !== null && m.temperature !== undefined ? m.temperature : '–') +
+                   ' · seed=' + (m.seed !== null && m.seed !== undefined ? m.seed : '–') +
+                   ' · start=' + sideLabel(m.starting_side || 1)]
+    ];
+    if (sourceLabel) rows.push(['File', sourceLabel]);
+    kv.innerHTML = '';
+    rows.forEach(function (r) {
+      var dt = document.createElement('dt'); dt.textContent = r[0];
+      var dd = document.createElement('dd'); dd.textContent = r[1];
+      kv.appendChild(dt); kv.appendChild(dd);
+    });
+
+    var blBadge = $('blunderBadge');
+    var nNs = parsed.blunders.length, nAll = parsed.allSureLosses.length;
+    if (nNs > 0) blBadge.innerHTML = '<span class="badge red">' + nNs + ' R10 blunder' + (nNs > 1 ? 's' : '') + '</span>';
+    else if (nAll > 0) blBadge.innerHTML = '<span class="badge warn">' + nAll + ' scout sure-loss</span>';
+    else blBadge.innerHTML = '<span class="badge ok">0 blunders</span>';
+
+    var chips = $('blunderChips');
+    chips.innerHTML = '';
+    var list = nNs > 0 ? parsed.blunders : parsed.allSureLosses;
+    list.forEach(function (st) {
+      var p = replay.plies[st - 1];
+      var btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'ply-chip';
+      btn.textContent = 'Ply ' + st + ': ' + sideLabel(p.side) + ' ' + C.NAMES[p.piece] + '→' + (p.battle ? C.NAMES[p.battle.defender] : '');
+      btn.addEventListener('click', function () { stopPlay(); setStep(st); });
+      chips.appendChild(btn);
+    });
+  }
+
+  function renderBoard() {
+    var st = parsed.states[step];
+    var lastPly = step > 0 ? replay.plies[step - 1] : null;
+    var lastSrc = lastPly ? C.normSq(lastPly.move[0]) : -1;
+    var lastDst = lastPly ? C.normSq(lastPly.move[1]) : -1;
+    var isBlunder = Boolean(lastPly && (lastPly.sure_loss_non_scout || lastPly.sure_loss));
+
+    var bsrc = currentBeliefSource();
+    activeBelief = bsrc.belief;
+    activeBeliefLabel = bsrc.label;
+    var showBelief = $('chkBelief').checked && Boolean(activeBelief);
+
+    // Status line & battle banner
+    var msgEl = $('statusMsg');
+    if (step === 0) {
+      msgEl.className = 'msg';
+      msgEl.textContent = 'Initial setup — ' + sideLabel((replay.meta && replay.meta.starting_side) || 1) + ' to move.';
+    } else {
+      var sideStr = sideLabel(lastPly.side);
+      var moveStr = C.NAMES[lastPly.piece] + ' ' + C.sqName(lastSrc) + '→' + C.sqName(lastDst);
+      msgEl.className = 'msg' + (lastPly.sure_loss_non_scout ? ' blunder' : (step === replay.plies.length ? ' win' : ''));
+      msgEl.textContent = 'Ply ' + step + '/' + replay.plies.length + ': ' + sideStr + ' ' + moveStr;
+    }
+    var nbLim = (replay.meta && replay.meta.no_battle_plies) || 200;
+    $('counters').textContent = 'Red ' + st.redCount + ' vs Blue ' + st.blueCount + ' · no battle ' + st.nb + '/' + nbLim;
+
+    var banner = $('battleBanner');
+    if (lastPly && lastPly.battle) {
+      var bt = lastPly.battle;
+      var resTxt = bt.result === 1 ? (C.NAMES[bt.attacker] + ' wins')
+                 : bt.result === -1 ? (C.NAMES[bt.defender] + ' wins') : 'Both removed (tie)';
+      var html = '';
+      if (lastPly.sure_loss_non_scout) html += '<span class="badge red">R10 SURE-LOSS BLUNDER</span>';
+      else if (lastPly.sure_loss) html += '<span class="badge warn">SCOUT SURE-LOSS</span>';
+      html += '<strong>Battle at ' + C.sqName(lastDst) + ':</strong> ' + sideLabel(lastPly.side) + ' ' +
+              C.NAMES[bt.attacker] + ' attacks ' + (bt.defender_was_revealed ? '<em>revealed</em> ' : 'hidden ') +
+              C.NAMES[bt.defender] + ' — <strong>' + resTxt + '</strong>.';
+      if (lastPly.belief && lastPly.belief[String(lastDst)]) {
+        var tb = lastPly.belief[String(lastDst)];
+        html += ' <span style="color:var(--muted)">(Pre-attack belief: ' + C.NAMES[tb.top_rank] + ' ' + Math.round(tb.top_prob * 100) + '%)</span>';
+      }
+      banner.innerHTML = html;
+      banner.className = 'battle-banner show' + (lastPly.sure_loss_non_scout ? ' blunder' : '');
+    } else {
+      banner.className = 'battle-banner';
+      banner.innerHTML = '';
+    }
+
+    // Belief accuracy summary in fully revealed mode
+    var hits = 0, totB = 0;
+    if (activeBelief) {
+      Object.keys(activeBelief).forEach(function (k) {
+        var sq = Number(k), bv = st.board[sq];
+        if (bv === C.EMPTY || bv === C.LAKE) return;
+        var isEnemyOfB = (bsrc.side === 1 && bv < 0) || (bsrc.side === -1 && bv > 0);
+        var stillHidden = bsrc.side === 1 ? !st.revRed[sq] : !st.revBlue[sq];
+        if (isEnemyOfB && stillHidden) {
+          totB++;
+          if (activeBelief[k].top_rank === Math.abs(bv)) hits++;
+        }
+      });
+    }
+    $('beliefAcc').textContent = totB > 0
+      ? (viewMode === 'full' ? (hits + '/' + totB + ' (' + Math.round(100 * hits / totB) + '%) · ' + activeBeliefLabel) : activeBeliefLabel)
+      : '';
+
+    for (var vis = 0; vis < 100; vis++) {
+      var sq = flipBoard ? (99 - vis) : vis;
+      var el = sqEls[vis];
+      var r = Math.floor(sq / N), c = sq % N;
+      var v = st.board[sq];
+      var cls = 'sq' + (((r + c) % 2) ? ' alt' : '');
+      if (v === C.LAKE) cls += ' lake';
+      if (sq === lastSrc || sq === lastDst) cls += isBlunder ? ' blunder-sq' : ' last';
+      if (sq === pinnedSq) cls += ' inspected';
+      el.className = cls;
+      el.dataset.sq = sq;
+      el.innerHTML = '';
+
+      if (c === (flipBoard ? 9 : 0)) {
+        var cr = document.createElement('span'); cr.className = 'sq-coord'; cr.textContent = String(N - r); el.appendChild(cr);
+      }
+      if (r === (flipBoard ? 0 : 9)) {
+        var cc = document.createElement('span'); cc.className = 'sq-coord'; cc.style.top = 'auto'; cc.style.bottom = '1px'; cc.style.left = 'auto'; cc.style.right = '2px';
+        cc.textContent = 'abcdefghij'[c]; el.appendChild(cc);
+      }
+
+      if (v !== C.EMPTY && v !== C.LAKE) {
+        var isRed = v > 0, rank = Math.abs(v);
+        var knownToOpp = isRed ? Boolean(st.revBlue[sq]) : Boolean(st.revRed[sq]);
+        var visible = (viewMode === 'full')
+                   || (viewMode === 'red' && (isRed || Boolean(st.revRed[sq])))
+                   || (viewMode === 'blue' && (!isRed || Boolean(st.revBlue[sq])));
+        var d = document.createElement('div');
+        var pCls = 'piece ' + (isRed ? 'red' : 'blue');
+        if (!visible) pCls += ' hidden';
+        if (knownToOpp) pCls += ' revealed-mark';
+        if (st.moved[sq]) pCls += ' moved-dot';
+        d.className = pCls;
+        if (visible) {
+          d.innerHTML = C.LABELS[rank] + '<small>' + C.NAMES[rank].slice(0, 4) + '</small>';
+        } else {
+          d.textContent = '?';
+        }
+        el.appendChild(d);
+
+        // Belief overlay on hidden enemy squares matching activeBelief
+        if (showBelief && activeBelief[String(sq)]) {
+          var isEnemyOfBelief = (bsrc.side === 1 && !isRed) || (bsrc.side === -1 && isRed);
+          var stillHiddenToBeliefSide = bsrc.side === 1 ? !st.revRed[sq] : !st.revBlue[sq];
+          if (isEnemyOfBelief && stillHiddenToBeliefSide) {
+            var be = activeBelief[String(sq)];
+            var tag = document.createElement('div');
+            var hitCls = viewMode === 'full' ? (be.top_rank === rank ? ' hit' : ' miss') : '';
+            tag.className = 'belief-tag' + hitCls;
+            tag.textContent = C.LABELS[be.top_rank] + ' ' + Math.round(be.top_prob * 100) + '%';
+            el.appendChild(tag);
+          }
+        }
+      }
+    }
+
+    renderCaptured($('capBlue'), st.capBlue, 'blue');
+    renderCaptured($('capRed'), st.capRed, 'red');
+  }
+
+  function renderCaptured(el, list, cls) {
+    el.innerHTML = '';
+    list.slice().sort(function (a, b) { return b - a; }).forEach(function (r) {
+      var s = document.createElement('span');
+      s.className = 'chip ' + cls; s.textContent = C.LABELS[r]; s.title = C.NAMES[r];
+      el.appendChild(s);
+    });
+  }
+
+  function renderTop5() {
+    var ul = $('top5List'), tag = $('top5Tag');
+    ul.innerHTML = '';
+    if (!replay || !replay.plies.length) { tag.textContent = ''; ul.innerHTML = '<li>No moves.</li>'; return; }
+
+    var plyObj = step > 0 ? replay.plies[step - 1] : replay.plies[0];
+    var labelPrefix = step === 0 ? 'Opening (Ply 1)' : ('Ply ' + step + ' · ' + sideLabel(plyObj.side));
+    var showNextFallback = false;
+    if (step > 0 && !plyObj.top5 && step < replay.plies.length && replay.plies[step].top5) {
+      // Keep the played ply visible if opponent moved, and also offer next net decision preview
+      showNextFallback = true;
+    }
+
+    var targetPly = plyObj;
+    if (showNextFallback) {
+      var liNote = document.createElement('li');
+      liNote.style.color = 'var(--muted)';
+      liNote.textContent = labelPrefix + ' (' + (plyObj.side === 1 ? replay.meta.red : replay.meta.blue) + ') — no network logits. Showing next net turn (Ply ' + (step + 1) + '):';
+      ul.appendChild(liNote);
+      targetPly = replay.plies[step];
+      labelPrefix = 'Next: Ply ' + (step + 1) + ' · ' + sideLabel(targetPly.side);
+    }
+
+    var valTxt = (targetPly.value !== null && targetPly.value !== undefined)
+      ? ' · V=' + (targetPly.value >= 0 ? '+' : '') + targetPly.value.toFixed(3) : '';
+    tag.textContent = labelPrefix + valTxt;
+
+    if (!targetPly.top5 || !targetPly.top5.length) {
+      var li0 = document.createElement('li');
+      li0.style.color = 'var(--muted)';
+      li0.textContent = 'No policy probabilities recorded for this ply.';
+      ul.appendChild(li0);
+      return;
+    }
+
+    var playedSrc = C.normSq(targetPly.move[0]), playedDst = C.normSq(targetPly.move[1]);
+    var stBefore = parsed.states[targetPly.ply];
+    var foundPlayed = false;
+
+    function addRow(mSrc, mDst, prob, isPlayed, rankLabel) {
+      var li = document.createElement('li');
+      var cls = isPlayed ? 'played' : '';
+      if (isPlayed && (targetPly.sure_loss_non_scout || targetPly.sure_loss)) cls += ' blunder';
+      li.className = cls;
+      var pc = Math.abs(stBefore.board[mSrc]);
+      var tgt = stBefore.board[mDst];
+      var pcVisible = viewMode === 'full' || (viewMode === 'red' && targetPly.side === 1) || (viewMode === 'blue' && targetPly.side === -1);
+      var pieceTxt = (pc && pcVisible) ? (C.NAMES[pc] + ' ') : '';
+      var atkTxt = (tgt !== C.EMPTY && tgt !== C.LAKE) ? ' ×' : '';
+      var blTxt = (isPlayed && targetPly.sure_loss_non_scout) ? ' [BLUNDER]' : (isPlayed ? ' ✓' : '');
+      var pct = Math.max(0, Math.min(100, prob * 100));
+      li.innerHTML =
+        '<div class="prob-head"><span>' + rankLabel + ' ' + pieceTxt + C.sqName(mSrc) + '→' + C.sqName(mDst) + atkTxt + blTxt + '</span>' +
+        '<span>' + pct.toFixed(1) + '%</span></div>' +
+        '<div class="bar-bg"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>';
+      ul.appendChild(li);
+    }
+
+    targetPly.top5.forEach(function (item, idx) {
+      var ms = C.normSq(item.move[0]), md = C.normSq(item.move[1]);
+      var isP = (ms === playedSrc && md === playedDst);
+      if (isP) foundPlayed = true;
+      addRow(ms, md, item.prob, isP, '#' + (idx + 1));
+    });
+    if (!foundPlayed && targetPly.played_prob !== null && targetPly.played_prob !== undefined) {
+      addRow(playedSrc, playedDst, targetPly.played_prob, true, 'Played');
+    }
+  }
+
+  function renderValueChart() {
+    var svg = $('valSvg');
+    svg.innerHTML = '';
+    if (!parsed || !parsed.values.length) {
+      var t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', '180'); t.setAttribute('y', '68'); t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('fill', 'currentColor'); t.setAttribute('opacity', '0.5'); t.setAttribute('font-size', '12');
+      t.textContent = 'No value estimates in this replay';
+      svg.appendChild(t);
+      return;
+    }
+
+    var W = 360, H = 130, padX = 6, padY = 10, maxStep = Math.max(replay.plies.length, 1);
+    function xOf(s) { return padX + (s / maxStep) * (W - 2 * padX); }
+    function yOf(v) { return padY + ((1 - Math.max(-1, Math.min(1, v))) / 2) * (H - 2 * padY); }
+
+    function el(tag, attrs) {
+      var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      Object.keys(attrs).forEach(function (k) { node.setAttribute(k, attrs[k]); });
+      return node;
+    }
+
+    // Zero midline & +/-0.5 grid
+    svg.appendChild(el('line', { x1: padX, y1: yOf(0), x2: W - padX, y2: yOf(0), stroke: 'currentColor', 'stroke-opacity': '0.35', 'stroke-dasharray': '3,3', 'stroke-width': '1' }));
+    svg.appendChild(el('line', { x1: padX, y1: yOf(0.5), x2: W - padX, y2: yOf(0.5), stroke: 'currentColor', 'stroke-opacity': '0.12', 'stroke-width': '1' }));
+    svg.appendChild(el('line', { x1: padX, y1: yOf(-0.5), x2: W - padX, y2: yOf(-0.5), stroke: 'currentColor', 'stroke-opacity': '0.12', 'stroke-width': '1' }));
+
+    // Blunder vertical markers
+    parsed.blunders.forEach(function (bs) {
+      var bx = xOf(bs);
+      svg.appendChild(el('line', { x1: bx, y1: padY, x2: bx, y2: H - padY, stroke: '#d62728', 'stroke-opacity': '0.5', 'stroke-width': '1.5' }));
+    });
+
+    // Value polyline
+    var pts = parsed.values.map(function (pt) { return xOf(pt.step).toFixed(1) + ',' + yOf(pt.redVal).toFixed(1); }).join(' ');
+    svg.appendChild(el('polyline', { fill: 'none', stroke: 'var(--accent)', 'stroke-width': '2', points: pts }));
+
+    // Blunder dots on curve
+    var valByStep = {};
+    parsed.values.forEach(function (pt) { valByStep[pt.step] = pt.redVal; });
+    parsed.blunders.forEach(function (bs) {
+      if (valByStep[bs] !== undefined) {
+        svg.appendChild(el('circle', { cx: xOf(bs), cy: yOf(valByStep[bs]), r: '4', fill: '#d62728', stroke: '#fff', 'stroke-width': '1' }));
+      }
+    });
+
+    // Cursor line & dot
+    svg.appendChild(el('line', { id: 'valCursorLine', x1: xOf(0), y1: padY, x2: xOf(0), y2: H - padY, stroke: 'var(--select)', 'stroke-width': '2' }));
+    svg.appendChild(el('circle', { id: 'valCursorDot', cx: xOf(0), cy: yOf(0), r: '4.5', fill: 'var(--accent)', stroke: '#fff', 'stroke-width': '1.5', visibility: 'hidden' }));
+  }
+
+  function updateValueCursor() {
+    var line = $('valCursorLine'), dot = $('valCursorDot'), nowEl = $('valNow');
+    if (!parsed || !parsed.values.length || !line) { nowEl.textContent = ''; return; }
+    var W = 360, H = 130, padX = 6, padY = 10, maxStep = Math.max(replay.plies.length, 1);
+    var cx = padX + (step / maxStep) * (W - 2 * padX);
+    line.setAttribute('x1', cx); line.setAttribute('x2', cx);
+
+    // Find exact or nearest value <= step
+    var best = null;
+    for (var i = 0; i < parsed.values.length; i++) {
+      if (parsed.values[i].step <= step) best = parsed.values[i];
+      else break;
+    }
+    if (best) {
+      var cy = padY + ((1 - Math.max(-1, Math.min(1, best.redVal))) / 2) * (H - 2 * padY);
+      dot.setAttribute('cx', padX + (best.step / maxStep) * (W - 2 * padX));
+      dot.setAttribute('cy', cy);
+      dot.setAttribute('visibility', 'visible');
+      nowEl.textContent = (best.redVal >= 0 ? '+' : '') + best.redVal.toFixed(3);
+    } else {
+      dot.setAttribute('visibility', 'hidden');
+      nowEl.textContent = '';
+    }
+  }
+
+  function renderBeliefInspector(sq) {
+    var body = $('beliefBody');
+    if (!replay || !activeBelief) {
+      body.innerHTML = '<span class="hint">No belief data recorded for this ply.</span>';
+      return;
+    }
+    if (sq === null || sq === undefined || !activeBelief[String(sq)]) {
+      body.innerHTML = '<span class="hint">Hover or click any square with a belief badge to inspect its full rank distribution.</span>';
+      return;
+    }
+    var st = parsed.states[step];
+    var be = activeBelief[String(sq)];
+    var v = st.board[sq];
+    var isRed = v > 0;
+    var showTrue = (viewMode === 'full')
+                || (viewMode === 'red' && (isRed || Boolean(st.revRed[sq])))
+                || (viewMode === 'blue' && (!isRed || Boolean(st.revBlue[sq])));
+    var trueRank = be.true_rank || Math.abs(v);
+    var head = '<div><strong>' + C.sqName(sq) + '</strong> ' + (pinnedSq === sq ? '(pinned — click to unpin)' : '') +
+               ' · Top: <strong>' + C.NAMES[be.top_rank] + '</strong> (' + (be.top_prob * 100).toFixed(1) + '%)<br>' +
+               'True rank: ' + (showTrue ? '<strong>' + C.NAMES[trueRank] + '</strong>' : '<em style="color:var(--muted)">hidden under fog</em>') + '</div>';
+
+    var ranked = [];
+    if (Array.isArray(be.probs) && be.probs.length === 12) {
+      for (var r = 1; r <= 12; r++) ranked.push({ rank: r, prob: be.probs[r - 1] });
+      ranked.sort(function (a, b) { return b.prob - a.prob; });
+    } else {
+      ranked.push({ rank: be.top_rank, prob: be.top_prob });
+    }
+    var ul = '<ul class="belief-bars">';
+    ranked.slice(0, 6).forEach(function (item) {
+      var pct = Math.max(0, Math.min(100, item.prob * 100));
+      var cls = (showTrue && item.rank === trueRank) ? ' class="true-row"' : '';
+      ul += '<li' + cls + '><span>' + C.LABELS[item.rank] + ' ' + C.NAMES[item.rank] + '</span>' +
+            '<div class="bar-bg"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+            '<span style="text-align:right">' + pct.toFixed(1) + '%</span></li>';
+    });
+    ul += '</ul>';
+    body.innerHTML = head + ul;
+  }
+
+  function renderTicks() {
+    var track = $('tickTrack');
+    track.innerHTML = '';
+    var maxStep = Math.max(replay.plies.length, 1);
+    parsed.battles.forEach(function (s) {
+      var d = document.createElement('div'); d.className = 'tick battle';
+      d.style.left = (100 * s / maxStep) + '%'; track.appendChild(d);
+    });
+    parsed.blunders.forEach(function (s) {
+      var d = document.createElement('div'); d.className = 'tick blunder';
+      d.style.left = (100 * s / maxStep) + '%'; track.appendChild(d);
+    });
+    var cur = document.createElement('div'); cur.id = 'tickCursor'; cur.className = 'tick cursor';
+    cur.style.left = '0%'; track.appendChild(cur);
+  }
+
+  function updateTicksCursor() {
+    var cur = $('tickCursor');
+    if (!cur || !replay) return;
+    cur.style.left = (100 * step / Math.max(replay.plies.length, 1)) + '%';
+  }
+
+  function renderMoveLog() {
+    var ul = $('moveLog');
+    ul.innerHTML = '';
+    $('logCount').textContent = replay.plies.length + ' plies';
+    replay.plies.forEach(function (p, idx) {
+      var li = document.createElement('li');
+      li.dataset.step = idx + 1;
+      if (p.sure_loss_non_scout) li.className = 'blunder';
+      var s1 = C.normSq(p.move[0]), s2 = C.normSq(p.move[1]);
+      var left = (idx + 1) + '. ' + sideLabel(p.side) + ' ' + C.NAMES[p.piece] + ' ' + C.sqName(s1) + '→' + C.sqName(s2);
+      var right = '';
+      if (p.battle) {
+        right = '×' + C.NAMES[p.battle.defender] + (p.battle.result === 1 ? ' W' : p.battle.result === -1 ? ' L' : ' =');
+      }
+      if (p.sure_loss_non_scout) right += ' [BLUNDER]';
+      li.innerHTML = '<span></span><span></span>';
+      li.children[0].textContent = left;
+      li.children[1].textContent = right;
+      li.addEventListener('click', function () { stopPlay(); setStep(idx + 1); });
+      ul.appendChild(li);
+    });
+  }
+
+  function highlightLogRow() {
+    var ul = $('moveLog');
+    var prev = ul.querySelector('li.cur');
+    if (prev) prev.classList.remove('cur');
+    if (step > 0 && ul.children[step - 1]) {
+      var cur = ul.children[step - 1];
+      cur.classList.add('cur');
+      cur.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function onSqEnter(ev) {
+    hoveredSq = Number(ev.currentTarget.dataset.sq);
+    if (pinnedSq === null) renderBeliefInspector(hoveredSq);
+  }
+  function onSqLeave() {
+    hoveredSq = null;
+    if (pinnedSq === null) renderBeliefInspector(null);
+  }
+  function onSqClick(ev) {
+    var sq = Number(ev.currentTarget.dataset.sq);
+    pinnedSq = (pinnedSq === sq) ? null : sq;
+    renderBoard();
+    renderBeliefInspector(pinnedSq !== null ? pinnedSq : hoveredSq);
+  }
+
+  // Value chart click & drag seek
+  var svgEl = $('valSvg'), svgDragging = false;
+  function seekFromSvg(ev) {
+    if (!replay || !replay.plies.length) return;
+    var rect = svgEl.getBoundingClientRect();
+    var frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / Math.max(rect.width, 1)));
+    var target = Math.round(frac * replay.plies.length);
+    if (ev.type === 'pointerdown' || svgDragging) {
+      stopPlay();
+      setStep(target);
+    } else {
+      $('valHover').textContent = 'Ply ' + target + ' / ' + replay.plies.length;
+    }
+  }
+  svgEl.addEventListener('pointerdown', function (ev) { svgDragging = true; svgEl.setPointerCapture(ev.pointerId); seekFromSvg(ev); });
+  svgEl.addEventListener('pointermove', seekFromSvg);
+  svgEl.addEventListener('pointerup', function () { svgDragging = false; });
+  svgEl.addEventListener('pointerleave', function () { svgDragging = false; $('valHover').textContent = 'Click or drag chart to seek'; });
+
+  // Controls wiring
+  $('scrubber').addEventListener('input', function (ev) { stopPlay(); setStep(Number(ev.target.value)); });
+  $('btnStart').addEventListener('click', function () { stopPlay(); setStep(0); });
+  $('btnPrev').addEventListener('click', function () { stopPlay(); setStep(step - 1); });
+  $('btnPlay').addEventListener('click', togglePlay);
+  $('btnNext').addEventListener('click', function () { stopPlay(); setStep(step + 1); });
+  $('btnEnd').addEventListener('click', function () { stopPlay(); setStep(replay ? replay.plies.length : 0); });
+  $('speedSel').addEventListener('change', function () { if (timer) { stopPlay(); togglePlay(); } });
+  $('btnPrevBattle').addEventListener('click', function () { jumpList(parsed && parsed.battles, -1); });
+  $('btnNextBattle').addEventListener('click', function () { jumpList(parsed && parsed.battles, 1); });
+  $('btnPrevBlunder').addEventListener('click', function () { jumpList(parsed && (parsed.blunders.length ? parsed.blunders : parsed.allSureLosses), -1); });
+  $('btnNextBlunder').addEventListener('click', function () { jumpList(parsed && (parsed.blunders.length ? parsed.blunders : parsed.allSureLosses), 1); });
+
+  ['viewFull', 'viewRed', 'viewBlue'].forEach(function (id) {
+    $(id).addEventListener('click', function (ev) {
+      viewMode = ev.currentTarget.dataset.view;
+      ['viewFull', 'viewRed', 'viewBlue'].forEach(function (bid) { $(bid).classList.toggle('active', bid === id); });
+      if (viewMode === 'blue') { flipBoard = true; $('chkFlip').checked = true; }
+      else if (viewMode === 'red') { flipBoard = false; $('chkFlip').checked = false; }
+      if (replay) { renderBoard(); renderTop5(); renderBeliefInspector(pinnedSq !== null ? pinnedSq : hoveredSq); }
+    });
+  });
+  $('chkFlip').addEventListener('change', function (ev) { flipBoard = ev.target.checked; if (replay) renderBoard(); });
+  $('chkBelief').addEventListener('change', function () { if (replay) renderBoard(); });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', function (ev) {
+    if (!replay) return;
+    var tag = (ev.target && ev.target.tagName) || '';
+    if (tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (ev.key === 'ArrowLeft') { ev.preventDefault(); stopPlay(); setStep(step - 1); }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); stopPlay(); setStep(step + 1); }
+    else if (ev.key === ' ') { ev.preventDefault(); togglePlay(); }
+    else if (ev.key === 'Home') { ev.preventDefault(); stopPlay(); setStep(0); }
+    else if (ev.key === 'End') { ev.preventDefault(); stopPlay(); setStep(replay.plies.length); }
+    else if (ev.key === 'b' || ev.key === 'B') { ev.preventDefault(); jumpList(parsed.battles, ev.shiftKey ? -1 : 1); }
+    else if (ev.key === 'x' || ev.key === 'X') {
+      ev.preventDefault();
+      jumpList(parsed.blunders.length ? parsed.blunders : parsed.allSureLosses, ev.shiftKey ? -1 : 1);
+    }
+  });
+
+  // File picker & drag-and-drop
+  $('fileInput').addEventListener('change', function (ev) {
+    var f = ev.target.files[0];
+    if (!f) return;
+    f.text().then(function (txt) { loadReplayText(txt, f.name); });
+  });
+
+  var dragDepth = 0;
+  document.addEventListener('dragenter', function (ev) { ev.preventDefault(); dragDepth++; $('dropOverlay').classList.add('show'); });
+  document.addEventListener('dragover', function (ev) { ev.preventDefault(); });
+  document.addEventListener('dragleave', function () { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('dropOverlay').classList.remove('show'); });
+  document.addEventListener('drop', function (ev) {
+    ev.preventDefault(); dragDepth = 0; $('dropOverlay').classList.remove('show');
+    var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (f) f.text().then(function (txt) { loadReplayText(txt, f.name); });
+  });
+
+  // Optional HTTP fetch loader (?file=url or ?game=url) and index.json discovery
+  function fetchReplayUrl(url) {
+    fetch(url).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (txt) {
+      loadReplayText(txt, url.split('/').pop());
+    }).catch(function (e) {
+      showError('Could not fetch replay "' + url + '": ' + e.message);
+    });
+  }
+
+  var params = new URLSearchParams(location.search);
+  var qFile = params.get('file') || params.get('game');
+  if (qFile) fetchReplayUrl(qFile);
+
+  if (location.protocol.indexOf('http') === 0) {
+    var idxCandidates = ['../../runs/replays/index.json', '../runs/replays/index.json', 'replays/index.json'];
+    (function tryNext(i) {
+      if (i >= idxCandidates.length) return;
+      var idxUrl = idxCandidates[i], baseDir = idxUrl.slice(0, idxUrl.lastIndexOf('/') + 1);
+      fetch(idxUrl).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (idx) {
+          if (!idx || !Array.isArray(idx.games) || !idx.games.length) return;
+          var sel = $('presetSelect');
+          idx.games.forEach(function (g) {
+            var opt = document.createElement('option');
+            opt.value = baseDir + g.file;
+            var bl = g.sure_loss_non_scout ? (' · ' + g.sure_loss_non_scout + ' R10 blunder') : '';
+            opt.textContent = g.red + ' vs ' + g.blue + ' (' + g.num_plies + ' plies' + bl + ')';
+            sel.appendChild(opt);
+          });
+          sel.style.display = '';
+          sel.addEventListener('change', function () { if (sel.value) fetchReplayUrl(sel.value); });
+          if (!qFile) { sel.selectedIndex = 1; fetchReplayUrl(sel.value); }
+        })
+        .catch(function () { tryNext(i + 1); });
+    })(0);
+  }
+})();
+</script>
+</body>
+</html>

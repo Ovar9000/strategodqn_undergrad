@@ -20,9 +20,9 @@ const fail = (msg) => { console.error(msg); process.exit(1); };
 
 function digest(obs) {
   const nz = [];
-  // every plane but the counters 28-29 (compared as values below)
-  for (let i = 0; i < E.OBS_PLANES * 100; i++) if (obs[i] !== 0 && (i < 28 * 100 || i >= 30 * 100)) nz.push(i);
-  return { nz, noBattle: obs[28 * 100], progress: obs[29 * 100] };
+  // planes 0-31 but the counters 28-29 (compared as values below, as are the outlook planes 32-40)
+  for (let i = 0; i < 32 * 100; i++) if (obs[i] !== 0 && (i < 28 * 100 || i >= 30 * 100)) nz.push(i);
+  return { nz, noBattle: obs[28 * 100], progress: obs[29 * 100], outlook: Array.from(obs.slice(32 * 100, E.OBS_PLANES * 100)) };
 }
 
 let plies = 0;
@@ -42,6 +42,15 @@ games.forEach((g, gi) => {
     const d = digest(game.observation(p.player));
     if (JSON.stringify(d.nz) !== JSON.stringify(p.obs_nonzero)) fail(`${where}: observation planes differ`);
     if (Math.abs(d.noBattle - p.no_battle_plane) > 1e-6 || Math.abs(d.progress - p.progress_plane) > 1e-6) fail(`${where}: counter planes differ`);
+    const bad = d.outlook.findIndex((v, i) => Math.abs(v - p.outlook[i]) > 1e-4);
+    if (bad >= 0) fail(`${where}: outlook plane ${32 + Math.floor(bad / 100)} square ${bad % 100}: js ${d.outlook[bad]} py ${p.outlook[bad]}`);
+    if (p.extra) {
+      const ext = game.observation(p.player, E.EXT_PLANES);
+      const e = p.extra.findIndex((v, i) => Math.abs(v - ext[41 * 100 + i]) > 1e-4);
+      if (e >= 0) fail(`${where}: extra plane ${41 + Math.floor(e / 100)} square ${e % 100}: js ${ext[41 * 100 + e]} py ${p.extra[e]}`);
+      const base = game.observation(p.player);
+      for (let i = 0; i < 41 * 100; i++) if (ext[i] !== base[i]) fail(`${where}: the first 41 planes change with 59`);
+    }
     game.step(p.move);
     plies++;
   });

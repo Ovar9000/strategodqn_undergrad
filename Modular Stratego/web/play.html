@@ -175,6 +175,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
           <button class="btn primary" id="startBtn">Start game</button>
           <button class="btn" id="shuffleBtn">Shuffle my setup</button>
           <button class="btn" id="newBtn">New game</button>
+          <button class="btn" id="downloadBtn" disabled>Download game</button>
         </div>
         <div class="row" style="margin-top:10px">
           <label for="firstSel" class="toggle">First move</label>
@@ -182,6 +183,13 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
             <option value="random">Random</option>
             <option value="me">Me</option>
             <option value="bot">Bot</option>
+          </select>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label for="styleSel" class="toggle">Bot play</label>
+          <select id="styleSel">
+            <option value="varied">Varied (samples its policy)</option>
+            <option value="best">Always its top move</option>
           </select>
         </div>
         <div class="row" style="margin-top:10px">
@@ -236,7 +244,9 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
   var LAKES = [[4, 2], [4, 3], [5, 2], [5, 3], [4, 6], [4, 7], [5, 6], [5, 7]];
   var DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];             // legal_moves order (environment.py)
   var ACTION_DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];      // up, down, left, right (action_encoding.py)
-  var NUM_ACTIONS = 3600, OBS_PLANES = 32;
+  var NUM_ACTIONS = 3600, BASE_PLANES = 32, OBS_PLANES = 41;   // 32 + battle outlook (battle_outlook.py)
+  var EXT_PLANES = 59;                                         // + public-information planes (vec/engine.py)
+  var INITIAL = [0, 1, 1, 8, 5, 4, 4, 4, 3, 2, 1, 1, 6];       // pieces of one side by rank 1..12
 
   function pieceSet() {
     var s = [P.FLAG, P.SPY, P.MARSHAL, P.GENERAL], i;
@@ -295,6 +305,43 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     return placement;
   }
 
+  // Structured setup (vec/setups.py): the Flag anywhere in the back two rows with 2-3 Bombs around
+  // it, the other pieces by row preferences (front row first in each weight list).
+  var ROW_WEIGHTS = {};
+  ROW_WEIGHTS[P.MARSHAL] = [3, 3, 2, 1]; ROW_WEIGHTS[P.GENERAL] = [3, 3, 2, 1]; ROW_WEIGHTS[P.COLONEL] = [2, 3, 2, 1];
+  ROW_WEIGHTS[P.MAJOR] = [2, 3, 2, 1]; ROW_WEIGHTS[P.CAPTAIN] = [3, 2, 2, 1]; ROW_WEIGHTS[P.LIEUTENANT] = [3, 2, 2, 1];
+  ROW_WEIGHTS[P.SERGEANT] = [2, 2, 2, 1]; ROW_WEIGHTS[P.MINER] = [1, 1, 3, 3]; ROW_WEIGHTS[P.SCOUT] = [4, 2, 1, 1];
+  ROW_WEIGHTS[P.SPY] = [1, 3, 3, 1]; ROW_WEIGHTS[P.BOMB] = [1, 2, 3, 2];
+  function structuredSetup(player, rng) {
+    rng = rng || Math.random;
+    var setup = [], free = [], i;                              // index 0-9 front row ... 30-39 back row
+    for (i = 0; i < 40; i++) { setup.push(0); free.push(i); }
+    function put(sq, piece) { setup[sq] = piece; free.splice(free.indexOf(sq), 1); }
+    function pick(piece) {
+      var w = free.map(function (sq) { return ROW_WEIGHTS[piece][Math.floor(sq / 10)]; });
+      var total = w.reduce(function (a, b) { return a + b; }, 0), x = rng() * total;
+      for (var k = 0; k < free.length; k++) { x -= w[k]; if (x < 0) return free[k]; }
+      return free[free.length - 1];
+    }
+    var flag = (rng() < 0.8 ? 30 : 20) + Math.floor(rng() * 10), r = Math.floor(flag / 10), c = flag % 10;
+    put(flag, P.FLAG);
+    var around = [[r - 1, c], [r, c - 1], [r, c + 1], [r + 1, c]]
+      .filter(function (q) { return q[0] >= 0 && q[0] < 4 && q[1] >= 0 && q[1] < 10; })
+      .map(function (q) { return q[0] * 10 + q[1]; });
+    for (i = around.length - 1; i > 0; i--) { var j = Math.floor(rng() * (i + 1)), t = around[i]; around[i] = around[j]; around[j] = t; }
+    var near = around.slice(0, choice([2, 3, 3], rng));
+    near.forEach(function (sq) { put(sq, P.BOMB); });
+    for (i = near.length; i < 6; i++) put(pick(P.BOMB), P.BOMB);
+    [[P.MARSHAL, 1], [P.GENERAL, 1], [P.SPY, 1], [P.COLONEL, 2], [P.MAJOR, 3], [P.MINER, 5], [P.SCOUT, 8],
+     [P.CAPTAIN, 4], [P.LIEUTENANT, 4], [P.SERGEANT, 4]].forEach(function (pc) {
+      for (var n = 0; n < pc[1]; n++) put(pick(pc[0]), pc[0]);
+    });
+    return setup.map(function (piece, sq) {                    // own canonical frame -> board squares
+      var rr = 6 + Math.floor(sq / 10), cc = sq % 10;
+      return [piece, player === 1 ? [rr, cc] : [N - 1 - rr, N - 1 - cc]];
+    });
+  }
+
   function Game(opts) {
     opts = opts || {};
     this.maxTurns = opts.maxTurns || 1500;              // PHASE_4_MAX_TURNS
@@ -324,12 +371,27 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     this.winner = null;
     this.winType = null;
     this.lastMove = null;
+    this.prevMove = null;
+    this.repMoves = { 1: [], '-1': [] };
     return this;
   };
-  // legal_moves (environment.py) on the actual board
+  // Official two-square rule: if `player`'s previous two quiet moves were A->B then B->A,
+  // repeating A->B on the third consecutive turn is illegal.
+  Game.prototype._forbiddenMove = function (player) {
+    var h = this.repMoves[player];
+    if (h && h.length === 2) {
+      var m2 = h[0], m1 = h[1];
+      if (m2[0][0] === m1[1][0] && m2[0][1] === m1[1][1] &&
+          m2[1][0] === m1[0][0] && m2[1][1] === m1[0][1]) {
+        return [m1[1], m1[0]];
+      }
+    }
+    return null;
+  };
+  // legal_moves (environment.py) on the actual board, excluding any forbidden two-square move
   Game.prototype.legalMoves = function (player) {
     player = player || this.current;
-    var b = this.actual, moves = [];
+    var b = this.actual, moves = [], forb = this._forbiddenMove(player);
     for (var i = 0; i < 100; i++) {
       var rank = b[i] * player;
       if (rank < 1 || rank > 12 || rank === P.FLAG || rank === P.BOMB) continue;
@@ -339,7 +401,9 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
         while (tr >= 0 && tr < N && tc >= 0 && tc < N) {
           var t = b[tr * N + tc];
           if (t === LAKE || t * player > 0) break;
-          moves.push([[r, c], [tr, tc]]);
+          if (!forb || r !== forb[0][0] || c !== forb[0][1] || tr !== forb[1][0] || tc !== forb[1][1]) {
+            moves.push([[r, c], [tr, tc]]);
+          }
           if (t !== EMPTY || !slides) break;
           tr += DIRS[d][0]; tc += DIRS[d][1];
         }
@@ -365,6 +429,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     }
     if (target !== EMPTY && target !== LAKE) {
       this.plies = 0;
+      this.repMoves = { 1: [], '-1': [] };
       var att = Math.abs(mover), def = Math.abs(target), res = battle(att, def);
       info.battle = { attacker: att, defender: def, result: res, player: p, from: move[0], to: move[1] };
       if (res === 1) {
@@ -385,9 +450,13 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       mv[to] = mover; mv[from] = EMPTY;
       ov[from] = EMPTY; ov[to] = revealed ? mover : HIDDEN;
       this.plies += 1;
+      var rh = this.repMoves[p];
+      rh.push([[move[0][0], move[0][1]], [move[1][0], move[1][1]]]);
+      if (rh.length > 2) rh.shift();
     }
     this.turn += 1;
     this.current = -p;
+    this.prevMove = this.lastMove;
     this.lastMove = move;
     this._checkEnd();
     return info;
@@ -415,9 +484,73 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     if (r2 < 0 || r2 >= N || c2 < 0 || c2 >= N) return null;
     return [canon(r1, c1, player), canon(r2, c2, player)];
   }
+  // Battle outlook (battle_outlook.py): win / lose indicators of attacker x defender ranks (1..12),
+  // an immobile attacker (Flag, Bomb) never attacks
+  var WIN = [], LOSE = [], IMMOBILE = [P.FLAG, P.BOMB];
+  (function () {
+    for (var a = 1; a <= 12; a++) {
+      WIN[a] = []; LOSE[a] = [];
+      for (var d = 1; d <= 12; d++) {
+        var res = IMMOBILE.indexOf(a) >= 0 ? null : battle(a, d);
+        WIN[a][d] = res === 1 ? 1 : 0; LOSE[a][d] = res === -1 ? 1 : 0;
+      }
+    }
+  })();
+  // Rank distributions (index 1..12) of a hidden piece that has not moved / has moved / made a long move
+  function hiddenDistributions(pool, nLong, nMoved) {
+    var c = pool.slice(), k, movable = [], tot = 0, moved = [], rest = [], unmoved = [], long = [];
+    c[P.SCOUT] = Math.max(0, c[P.SCOUT] - nLong);
+    for (k = 1; k <= 12; k++) { movable[k] = IMMOBILE.indexOf(k) >= 0 ? 0 : 1; tot += c[k] * movable[k]; }
+    for (k = 1; k <= 12; k++) moved[k] = tot > 0 ? c[k] * movable[k] / tot : movable[k] / 10;
+    tot = 0;
+    for (k = 1; k <= 12; k++) { rest[k] = Math.max(0, c[k] - nMoved * moved[k]); tot += rest[k]; }
+    for (k = 1; k <= 12; k++) { unmoved[k] = tot > 0 ? rest[k] / tot : 1 / 12; long[k] = k === P.SCOUT ? 1 : 0; }
+    return [unmoved, moved, long];
+  }
+  // Planes 32-40 from the first 32 (canonical frame, filled in obs) and the rank counts of the
+  // pieces `player` cannot see
+  Game.prototype._outlook = function (player, obs) {
+    var pool = [], k, i, j, nLong = 0, nMoved = 0, view = this.vis[player];
+    for (k = 0; k <= 12; k++) pool[k] = 0;
+    for (i = 0; i < 100; i++) if (view[i] === HIDDEN) pool[Math.abs(this.actual[i])] += 1;
+    for (j = 0; j < 100; j++) if (obs[24 * 100 + j]) { if (obs[31 * 100 + j]) nLong++; else if (obs[30 * 100 + j]) nMoved++; }
+    var dist = hiddenDistributions(pool, nLong, nMoved), target = [], own = [], occupied = [];
+    for (j = 0; j < 100; j++) {
+      target[j] = null; own[j] = 0;
+      for (k = 0; k < 12; k++) {
+        if (obs[k * 100 + j]) own[j] = k + 1;
+        if (obs[(12 + k) * 100 + j]) { target[j] = []; for (var e = 1; e <= 12; e++) target[j][e] = e === k + 1 ? 1 : 0; }
+      }
+      if (obs[24 * 100 + j]) target[j] = dist[obs[31 * 100 + j] ? 2 : (obs[30 * 100 + j] ? 1 : 0)];
+      occupied[j] = own[j] || target[j] || obs[25 * 100 + j];
+    }
+    for (j = 0; j < 100; j++) {
+      var a = own[j]; if (!a) continue;
+      var r = Math.floor(j / N), c = j % N, threat = 0;
+      for (var d = 0; d < 4; d++) {
+        var dr = ACTION_DIRS[d][0], dc = ACTION_DIRS[d][1], reach = null;
+        for (var step = 1; step <= (a === P.SCOUT ? 9 : 1); step++) {
+          var tr = r + dr * step, tc = c + dc * step;
+          if (tr < 0 || tr >= N || tc < 0 || tc >= N) break;
+          var t = tr * N + tc;
+          if (occupied[t]) { reach = target[t]; break; }
+        }
+        var pw = 0, pl = 0;
+        if (reach) for (k = 1; k <= 12; k++) { pw += reach[k] * WIN[a][k]; pl += reach[k] * LOSE[a][k]; }
+        obs[(32 + d) * 100 + j] = pw; obs[(36 + d) * 100 + j] = pl;
+        var nr = r + dr, nc = c + dc;
+        if (nr >= 0 && nr < N && nc >= 0 && nc < N && target[nr * N + nc]) {
+          var adj = target[nr * N + nc], pt = 0;
+          for (k = 1; k <= 12; k++) pt += adj[k] * WIN[k][a];
+          threat = Math.max(threat, pt);
+        }
+      }
+      obs[40 * 100 + j] = threat;
+    }
+  };
   // Observation planes (observation.py) of `player`'s view, normal fog of war (observability 0):
-  // a Float32Array of `planes` x 10 x 10 (planes beyond 32 are AAREN embeddings, left at zero;
-  // a model with fewer planes, trained before planes 30-31 existed, gets only the first ones).
+  // a Float32Array of `planes` x 10 x 10 (planes beyond 41 are AAREN embeddings, left at zero;
+  // a model with fewer planes, trained before planes 30-31 or 32-40 existed, gets only the first ones).
   Game.prototype.observation = function (player, planes) {
     planes = planes || OBS_PLANES;
     var obs = new Float32Array(planes * 100), view = this.vis[player], enemyView = this.vis[-player];
@@ -429,7 +562,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       if (v === LAKE) obs[25 * 100 + j] = 1;
       else if (v === HIDDEN) {
         obs[24 * 100 + j] = 1;
-        if (planes >= OBS_PLANES) { obs[30 * 100 + j] = this.moved[i]; obs[31 * 100 + j] = this.longMoved[i]; }
+        if (planes >= BASE_PLANES) { obs[30 * 100 + j] = this.moved[i]; obs[31 * 100 + j] = this.longMoved[i]; }
       }
       else if (v !== EMPTY) {
         var s = v * player;
@@ -444,7 +577,28 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       obs[28 * 100 + j] = noBattle;
       obs[29 * 100 + j] = progress;
     }
+    if (planes >= OBS_PLANES) this._outlook(player, obs);
+    if (planes >= EXT_PLANES) this._extra(player, obs);
     return obs;
+  };
+  // Planes 41-58 (vec/engine.py), for the side to move: the share of each enemy rank still hidden,
+  // own pieces that have moved / made a long move, the enemy's last move and the own last move.
+  Game.prototype._extra = function (player, obs) {
+    var pool = [], k, i, j, view = this.vis[player];
+    for (k = 0; k <= 12; k++) pool[k] = 0;
+    for (i = 0; i < 100; i++) if (view[i] === HIDDEN) pool[Math.abs(this.actual[i])] += 1;
+    for (k = 1; k <= 12; k++) { var share = pool[k] / INITIAL[k]; for (j = 0; j < 100; j++) obs[(40 + k) * 100 + j] = share; }
+    for (i = 0; i < 100; i++) {
+      var own = this.actual[i] * player;
+      if (own < 1 || own > 12) continue;
+      var cc = canon(Math.floor(i / N), i % N, player); j = cc[0] * N + cc[1];
+      obs[53 * 100 + j] = this.moved[i]; obs[54 * 100 + j] = this.longMoved[i];
+    }
+    [[this.lastMove, 55], [this.prevMove, 57]].forEach(function (mp) {
+      if (!mp[0]) return;
+      var a = canon(mp[0][0][0], mp[0][0][1], player), b = canon(mp[0][1][0], mp[0][1][1], player);
+      obs[mp[1] * 100 + a[0] * N + a[1]] = 1; obs[(mp[1] + 1) * 100 + b[0] * N + b[1]] = 1;
+    });
   };
   Game.prototype.clone = function () {
     var g = new Game({ maxTurns: this.maxTurns, noBattleLimit: this.noBattleLimit });
@@ -452,7 +606,11 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     g.vis = { 1: this.vis[1].slice(), '-1': this.vis[-1].slice() };
     g.moved = this.moved.slice(); g.longMoved = this.longMoved.slice();
     g.flags = { 1: this.flags[1], '-1': this.flags[-1] };
-    ['current', 'turn', 'plies', 'over', 'winner', 'winType', 'lastMove'].forEach(function (k) { g[k] = this[k]; }, this);
+    g.repMoves = {
+      1: this.repMoves[1].map(function (m) { return [[m[0][0], m[0][1]], [m[1][0], m[1][1]]]; }),
+      '-1': this.repMoves['-1'].map(function (m) { return [[m[0][0], m[0][1]], [m[1][0], m[1][1]]]; })
+    };
+    ['current', 'turn', 'plies', 'over', 'winner', 'winType', 'lastMove', 'prevMove'].forEach(function (k) { g[k] = this[k]; }, this);
     return g;
   };
 
@@ -477,17 +635,156 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
   }
 
   root.StrategoEngine = { Game: Game, P: P, NAMES: NAMES, LABELS: LABELS, LAKE: LAKE, HIDDEN: HIDDEN, EMPTY: EMPTY,
-                          NUM_ACTIONS: NUM_ACTIONS, OBS_PLANES: OBS_PLANES, battle: battle, heuristicSetup: heuristicSetup,
+                          NUM_ACTIONS: NUM_ACTIONS, OBS_PLANES: OBS_PLANES, EXT_PLANES: EXT_PLANES, battle: battle, heuristicSetup: heuristicSetup,
+                          structuredSetup: structuredSetup,
                           heuristicMove: heuristicMove, encodeMove: encodeMove, decodeAction: decodeAction, pieceSet: pieceSet };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+
+<!-- Replay recorder (schema_version = 1, identical to vec/record_games.py and web/replay.html) -->
+<script id="replay-export">
+(function (root) {
+  'use strict';
+  var SCHEMA_VERSION = 1, N = 10;
+  var END_TYPE_MAP = {
+    flag_capture: 'flag',
+    no_moves: 'no_moves',
+    no_battle_draw: 'no_battle',
+    timeout: 'turn_limit'
+  };
+
+  function createRecorder(game, opts) {
+    opts = opts || {};
+    var red = new Array(40), blue = new Array(40), i;
+    for (i = 0; i < 40; i++) {
+      blue[i] = Math.abs(game.actual[i]);
+      red[i] = Math.abs(game.actual[60 + i]);
+    }
+    return {
+      model: opts.model || 'heuristic',
+      red: opts.red || 'human',
+      blue: opts.blue || opts.model || 'heuristic',
+      netSide: opts.netSide !== undefined ? opts.netSide : -1,
+      startingSide: game.current,
+      temperature: opts.temperature !== undefined ? opts.temperature : null,
+      maxPlies: game.maxTurns,
+      noBattlePlies: game.noBattleLimit,
+      setups: { red: red, blue: blue },
+      plies: []
+    };
+  }
+
+  function capturePreMove(game, move) {
+    var E = root.StrategoEngine;
+    var side = game.current;
+    var src = move[0][0] * N + move[0][1], dst = move[1][0] * N + move[1][1];
+    var mover = game.actual[src], target = game.actual[dst];
+    var isTarget = target !== E.EMPTY && target !== E.LAKE;
+    return {
+      side: side,
+      src: src,
+      dst: dst,
+      piece: Math.abs(mover),
+      defWasRev: isTarget ? (game.vis[side][dst] === target) : false,
+      attWasRev: game.vis[-side][src] === mover
+    };
+  }
+
+  function recordPly(rec, pre, info, botMeta) {
+    var E = root.StrategoEngine;
+    var battleObj = null, sureLoss = false, sureLossNonScout = false;
+    if (info && info.battle) {
+      var bt = info.battle, reveals = [];
+      if (bt.result === 1) reveals.push({ sq: pre.dst, side: pre.side, rank: bt.attacker });
+      else if (bt.result === -1) reveals.push({ sq: pre.dst, side: -pre.side, rank: bt.defender });
+      battleObj = {
+        attacker: bt.attacker,
+        defender: bt.defender,
+        result: bt.result,
+        defender_was_revealed: pre.defWasRev,
+        attacker_was_revealed: pre.attWasRev,
+        reveals: reveals
+      };
+      sureLoss = Boolean(pre.defWasRev && bt.result === -1);
+      sureLossNonScout = Boolean(sureLoss && pre.piece !== E.P.SCOUT);
+    }
+    rec.plies.push({
+      ply: rec.plies.length,
+      side: pre.side,
+      move: [pre.src, pre.dst],
+      piece: pre.piece,
+      battle: battleObj,
+      top5: botMeta && botMeta.top5 ? botMeta.top5 : null,
+      played_prob: botMeta && botMeta.playedProb !== undefined ? botMeta.playedProb : null,
+      value: botMeta && botMeta.value !== undefined ? botMeta.value : null,
+      belief: null,
+      sure_loss: sureLoss,
+      sure_loss_non_scout: sureLossNonScout
+    });
+  }
+
+  function buildReplayJson(rec, game) {
+    var netSide = rec.netSide;
+    var slAll = [], slNs = [];
+    for (var i = 0; i < rec.plies.length; i++) {
+      var p = rec.plies[i];
+      if (netSide === 0 || p.side === netSide) {
+        if (p.sure_loss) slAll.push(p.ply);
+        if (p.sure_loss_non_scout) slNs.push(p.ply);
+      }
+    }
+    var endType = game && game.over ? (END_TYPE_MAP[game.winType] || game.winType || 'unknown') : 'in_progress';
+    return {
+      schema_version: SCHEMA_VERSION,
+      meta: {
+        source: 'play_html',
+        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        model: rec.model,
+        opponent: 'human',
+        red: rec.red,
+        blue: rec.blue,
+        net_side: netSide,
+        starting_side: rec.startingSide,
+        temperature: rec.temperature,
+        seed: null,
+        max_plies: rec.maxPlies,
+        no_battle_plies: rec.noBattlePlies,
+        winner: game && game.over ? game.winner : null,
+        end_type: endType,
+        num_plies: rec.plies.length,
+        blunders: {
+          sure_loss_total: slAll.length,
+          sure_loss_non_scout: slNs.length,
+          sure_loss_plies: slNs,
+          sure_loss_all_plies: slAll
+        }
+      },
+      setups: {
+        red: rec.setups.red.slice(),
+        blue: rec.setups.blue.slice()
+      },
+      plies: rec.plies.slice()
+    };
+  }
+
+  root.StrategoReplayExport = {
+    SCHEMA_VERSION: SCHEMA_VERSION,
+    END_TYPE_MAP: END_TYPE_MAP,
+    createRecorder: createRecorder,
+    capturePreMove: capturePreMove,
+    recordPly: recordPly,
+    buildReplayJson: buildReplayJson
+  };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 
 <script>
 (function () {
   'use strict';
-  var E = window.StrategoEngine, N = 10, ME = 1, BOT = -1;
+  var E = window.StrategoEngine, R = window.StrategoReplayExport, N = 10, ME = 1, BOT = -1;
   var game = null, phase = 'setup', mySetup = null, botSetup = null, selected = null, swapFirst = null;
   var session = null, inputPlanes = E.OBS_PLANES, modelName = null, botBusy = false;
+  var replayRec = null, pendingBotMeta = null;
   var captured = { 1: [], '-1': [] };
   var $ = function (id) { return document.getElementById(id); };
   var boardEl = $('board');
@@ -515,13 +812,14 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
 
   function newSetup() {
     mySetup = E.heuristicSetup(ME);
-    botSetup = E.heuristicSetup(BOT);
+    botSetup = Math.random() < 0.3 ? E.heuristicSetup(BOT) : E.structuredSetup(BOT);
     game = new E.Game().reset(mySetup, botSetup, 1);
     phase = 'setup'; selected = null; swapFirst = null;
+    replayRec = null; pendingBotMeta = null;
     captured = { 1: [], '-1': [] };
     $('log').innerHTML = '';
     $('qList').innerHTML = '<li><span>No move yet</span><span></span></li>';
-    $('startBtn').disabled = false; $('shuffleBtn').disabled = false;
+    $('startBtn').disabled = false; $('shuffleBtn').disabled = false; $('downloadBtn').disabled = true;
     setMsg('Arrange your pieces (click two to swap), then start.');
     render();
   }
@@ -533,8 +831,12 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     for (var i = 0; i < 100; i++) { var v = game.actual[i]; if (v > 0) mine.push([v, [Math.floor(i / N), i % N]]); }
     mySetup = mine;
     game = new E.Game().reset(mySetup, botSetup, starter);
+    var bName = session ? (modelName || 'onnx') : 'heuristic';
+    var temp = !session ? null : ($('styleSel').value === 'best' ? 0.0 : 0.5);
+    replayRec = R.createRecorder(game, { model: bName, red: 'human', blue: bName, netSide: BOT, temperature: temp });
+    pendingBotMeta = null;
     phase = 'play'; selected = null;
-    $('startBtn').disabled = true; $('shuffleBtn').disabled = true;
+    $('startBtn').disabled = true; $('shuffleBtn').disabled = true; $('downloadBtn').disabled = false;
     log((starter === ME ? 'You move' : 'The bot moves') + ' first.');
     render();
     afterMove();
@@ -564,7 +866,13 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
   }
 
   function play(move) {
+    var pre = (replayRec && move) ? R.capturePreMove(game, move) : null;
     var who = game.current, info = game.step(move);
+    if (replayRec && pre) {
+      var bmeta = who === BOT ? pendingBotMeta : null;
+      pendingBotMeta = null;
+      R.recordPly(replayRec, pre, info, bmeta);
+    }
     selected = null;
     var text = (who === ME ? 'You: ' : 'Bot: ') + sqName(move[0]) + '→' + sqName(move[1]);
     if (info.battle) {
@@ -602,6 +910,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     if (!moves.length) return null;
     if (!session) {
       var m = E.heuristicMove(game, BOT);
+      pendingBotMeta = { top5: null, playedProb: null, value: null };
       showChoice([{ move: m, q: null }], m);
       return m;
     }
@@ -609,18 +918,70 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       var obs = game.observation(BOT, inputPlanes);
       var out = await session.run({ obs: new ort.Tensor('float32', obs, [1, inputPlanes, N, N]) });
       var q = out[session.outputNames[0]].data;
+      var valOut = (out.value && out.value.data && out.value.data.length)
+        ? Math.round(Number(out.value.data[0]) * 10000) / 10000 : null;
       var scored = moves.map(function (m) { return { move: m, q: q[E.encodeMove(m, BOT)] }; });
       scored.sort(function (a, b) { return b.q - a.q; });
-      showChoice(scored.slice(0, 6), scored[0].move);
-      return scored[0].move;
+      var pick = scored[0];
+      if (session.outputNames[0] === 'policy') {
+        // a policy network: the outputs are logits; turn the legal ones into probabilities
+        var top = scored[0].q, total = 0;
+        scored.forEach(function (s) { s.p = Math.exp(s.q - top); total += s.p; });
+        scored.forEach(function (s) { s.p /= total; });
+        if ($('styleSel').value === 'varied') {
+          // sample from the policy sharpened to temperature 1/2, among moves with at least 3%
+          var w = scored.map(function (s) { return s.p >= 0.03 ? s.p * s.p : 0; });
+          var sum = w.reduce(function (a, b) { return a + b; }, 0), x = Math.random() * sum;
+          for (var k = 0; k < scored.length; k++) { x -= w[k]; if (x < 0) { pick = scored[k]; break; } }
+        }
+        pendingBotMeta = {
+          top5: scored.slice(0, 5).map(function (s) {
+            return { move: [s.move[0][0] * N + s.move[0][1], s.move[1][0] * N + s.move[1][1]], prob: Math.round(s.p * 10000) / 10000 };
+          }),
+          playedProb: Math.round(pick.p * 10000) / 10000,
+          value: valOut
+        };
+      } else {
+        var qTop = scored[0].q, qSum = 0;
+        scored.forEach(function (s) { s._qp = Math.exp(s.q - qTop); qSum += s._qp; });
+        pendingBotMeta = {
+          top5: scored.slice(0, 5).map(function (s) {
+            return { move: [s.move[0][0] * N + s.move[0][1], s.move[1][0] * N + s.move[1][1]], prob: Math.round((s._qp / qSum) * 10000) / 10000 };
+          }),
+          playedProb: Math.round((pick._qp / qSum) * 10000) / 10000,
+          value: valOut
+        };
+      }
+      var shown = scored.slice(0, 6);
+      if (shown.indexOf(pick) < 0) shown.push(pick);          // always list the move it played
+      showChoice(shown, pick.move, obs);
+      return pick.move;
     } catch (e) {
       log('Model error, falling back to the heuristic: ' + e.message);
       session = null; updateModelInfo();
+      pendingBotMeta = { top5: null, playedProb: null, value: null };
       return E.heuristicMove(game, BOT);
     }
   }
 
-  function showChoice(list, chosen) {
+  // Why a move looks the way it does, read off the battle-outlook planes the network sees
+  // (planes 32-40, battle_outlook.py): the odds of an attack, or a threatened piece moving away.
+  function reason(move, obs) {
+    if (!obs || obs.length < E.OBS_PLANES * 100) return '';
+    var idx = E.encodeMove(move, BOT), sq = Math.floor(idx / 36), d = Math.floor((idx % 36) / 9);
+    var t = game.vis[BOT][move[1][0] * N + move[1][1]];
+    var enemy = t === E.HIDDEN || (t !== E.EMPTY && t !== E.LAKE && t * BOT < 0);
+    var pct = function (x) { return Math.round(100 * x) + '%'; };
+    if (enemy) {
+      var w = obs[(32 + d) * 100 + sq], l = obs[(36 + d) * 100 + sq];
+      if (w > 0.999) return 'attack: wins';
+      if (l > 0.999) return 'attack: loses';
+      return 'attack: ' + pct(w) + ' win / ' + pct(l) + ' lose';
+    }
+    return obs[40 * 100 + sq] > 0.5 ? 'threatened piece moves away' : '';
+  }
+
+  function showChoice(list, chosen, obs) {
     var ul = $('qList'); ul.innerHTML = '';
     list.forEach(function (s) {
       var li = document.createElement('li');
@@ -629,7 +990,9 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       var tag = $('peek').checked ? E.NAMES[piece] + ' ' : '';
       li.innerHTML = '<span></span><span></span>';
       li.children[0].textContent = tag + sqName(s.move[0]) + '→' + sqName(s.move[1]);
-      li.children[1].textContent = s.q === null ? 'heuristic' : 'Q ' + s.q.toFixed(3);
+      var why = s.q === null ? '' : reason(s.move, obs);
+      var val = s.q === null ? 'heuristic' : (s.p !== undefined ? Math.round(100 * s.p) + '%' : 'Q ' + s.q.toFixed(3));
+      li.children[1].textContent = val + (why ? ' · ' + why : '');
       ul.appendChild(li);
     });
   }
@@ -690,7 +1053,10 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
 
   function updateModelInfo() {
     $('botName').textContent = session ? 'Network: ' + modelName : 'Heuristic (no model loaded)';
-    $('botInputs').textContent = session ? inputPlanes + ' planes (' + E.OBS_PLANES + ' observation' + (inputPlanes > E.OBS_PLANES ? ' + ' + (inputPlanes - E.OBS_PLANES) + ' AAREN, zero' : '') + ') → 3600 Q-values' : '–';
+    var policy = session && session.outputNames[0] === 'policy';
+    $('botInputs').textContent = !session ? '–' : policy
+      ? inputPlanes + ' planes (' + E.OBS_PLANES + ' observation + ' + (inputPlanes - E.OBS_PLANES) + ' public information) → 3600 move probabilities'
+      : inputPlanes + ' planes (' + E.OBS_PLANES + ' observation' + (inputPlanes > E.OBS_PLANES ? ' + ' + (inputPlanes - E.OBS_PLANES) + ' AAREN, zero' : '') + ') → 3600 Q-values';
   }
 
   async function loadModel(bytes, name) {
@@ -709,11 +1075,29 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
         }
       }
       session = s; inputPlanes = planes; modelName = name;
+      if (replayRec) { replayRec.model = name; replayRec.blue = name; }
       updateModelInfo();
       log('Loaded model ' + name + '.');
     } catch (e) {
       log('Could not load ' + name + ': ' + e.message);
     }
+  }
+
+  function downloadGame() {
+    if (!replayRec) return;
+    var data = R.buildReplayJson(replayRec, game);
+    var stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    var safeBot = String(data.meta.blue || 'bot').replace(/[^a-zA-Z0-9._-]+/g, '_');
+    var fname = 'stratego_human_vs_' + safeBot + '_' + stamp + '.json';
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    log('Downloaded game replay (' + data.plies.length + ' plies) -> ' + fname);
   }
 
   $('modelFile').addEventListener('change', function (ev) {
@@ -727,6 +1111,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     swapFirst = null; render();
   });
   $('newBtn').addEventListener('click', newSetup);
+  $('downloadBtn').addEventListener('click', downloadGame);
   $('peek').addEventListener('change', render);
 
   newSetup();
