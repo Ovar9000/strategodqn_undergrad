@@ -138,6 +138,7 @@ class Board:
     max_turns: int = MAX_TURNS
     no_battle_draw_plies: int = NO_BATTLE_DRAW_PLIES  # 0: no no-battle draw
     end_reason: Optional[str] = None  # set by move_and_resolve when a move ends the game
+    rep_moves: Dict[int, List[Tuple[Tuple[int, int], Tuple[int, int]]]] = field(default_factory=lambda: {1: [], 2: []})
 
     def in_bounds(self, r: int, c: int) -> bool:
         return 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE
@@ -193,11 +194,24 @@ class Board:
             return True
         return False
 
+    def _forbidden_two_square_move(self, owner: int) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+        """Official two-square rule: if `owner`'s previous two quiet moves were A->B then B->A,
+        repeating A->B on the third consecutive turn is illegal."""
+        hist = self.rep_moves.get(owner, [])
+        if len(hist) == 2:
+            (s2, d2), (s1, d1) = hist
+            if s2 == d1 and d2 == s1:
+                return (d1, s1)
+        return None
+
     def legal_moves_from(self, pos: Tuple[int, int]) -> List[Tuple[int, int]]:
         sr, sc = pos
         p = self.get(pos)
         if not p or not p.is_movable():
             return []
+
+        forb = self._forbidden_two_square_move(p.owner)
+        forb_dst = forb[1] if forb is not None and forb[0] == (sr, sc) else None
 
         moves = []
         deltas = [(-1,0),(1,0),(0,-1),(0,1)]
@@ -214,9 +228,10 @@ class Board:
                 r, c = sr + dr, sc + dc
                 while self.in_bounds(r, c) and not self.is_lake(r, c):
                     if self.grid[r][c] is None:
-                        moves.append((r, c))
+                        if (r, c) != forb_dst:
+                            moves.append((r, c))
                     else:
-                        if self.grid[r][c].owner != p.owner:
+                        if self.grid[r][c].owner != p.owner and (r, c) != forb_dst:
                             moves.append((r, c))
                         break
                     r += dr
@@ -225,7 +240,7 @@ class Board:
 
         for dr, dc in deltas:
             r, c = sr + dr, sc + dc
-            if can_land(r, c):
+            if can_land(r, c) and (r, c) != forb_dst:
                 moves.append((r, c))
         return moves
 
@@ -255,6 +270,13 @@ class Board:
         attacker.long_moved = attacker.long_moved or abs(dst[0] - src[0]) + abs(dst[1] - src[1]) > 1
         self.turn_count += 1
         self.plies_since_battle = 0 if defender is not None else self.plies_since_battle + 1
+        if defender is not None:
+            self.rep_moves = {1: [], 2: []}
+        else:
+            hist = self.rep_moves.setdefault(attacker.owner, [])
+            hist.append(((int(src[0]), int(src[1])), (int(dst[0]), int(dst[1]))))
+            if len(hist) > 2:
+                del hist[:-2]
 
         # Helper function to get piece name with visibility rules
         def get_piece_name(piece, is_attacker, is_defender):

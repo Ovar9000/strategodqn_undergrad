@@ -10,6 +10,9 @@ from typing import Tuple, Optional, List, Dict
 import marq_path  # noqa: F401  (Modular Stratego on sys.path)
 from network.drqn_agent import RainbowAgent, V_MIN, V_MAX, NUM_ATOMS
 from network.history_aggregator import HistoryAggregator
+from environment.action_encoding import encode_move
+from environment.battle_outlook import INITIAL_COUNTS
+from environment.observation import encode_observations, to_canonical
 from environment.piece import PieceType, NUM_PIECE_TYPES
 from environment.board import LAKE_SQUARE, HIDDEN_PIECE
 from settings.training_config import DEFAULT_MAX_TURNS, EVAL_NO_BATTLE_DRAW_PLIES
@@ -51,6 +54,7 @@ class GuiObservation:
     max_turns: int = DEFAULT_MAX_TURNS
     no_battle_draw_plies: int = EVAL_NO_BATTLE_DRAW_PLIES
     observability: float = 0.0
+    hidden_pool: Optional[np.ndarray] = None  # (12,) rank counts of the hidden enemy pieces (battle outlook)
 
 def to_piece_type(val) -> PieceType:
     if isinstance(val, PieceType):
@@ -161,15 +165,16 @@ class ExpectamaxSearch:
         expected_utility = 0.0
         attacker_rank = board.get(src).rank
         
-        # Sort probabilities to explore top 3 highest likelihoods (pruning chance branching factor)
-        sorted_probs = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)
-        top_n = min(3, len(sorted_probs))
-        
-        subset_prob_sum = sum(p for pt, p in sorted_probs[:top_n])
-        if subset_prob_sum == 0: subset_prob_sum = 1.0
-        
-        for p_type, prob in sorted_probs[:top_n]:
-            norm_prob = prob / subset_prob_sum
+        # Evaluate all ranks with positive probability (at most 12 ranks), highest likelihood first
+        active_probs = [(pt, p) for pt, p in sorted(probabilities.items(), key=lambda x: x[1], reverse=True) if p > 0]
+        if not active_probs:
+            sim_board = self._simulate_move_simple(board, move)
+            return self._min_node(sim_board, 3 - player, depth, start_time, prior_q, DQN_adapter)
+
+        total_prob = sum(p for _, p in active_probs)
+
+        for p_type, prob in active_probs:
+            norm_prob = prob / total_prob
             
             outcome, sim_board = self._simulate_combat(board, move, attacker_rank, p_type)
             combat_utility = self._calculate_outcome_utility(attacker_rank, p_type)
@@ -368,47 +373,109 @@ class ExpectamaxSearch:
         if att_pt.value > def_pt.value:
             return 0.5 + (def_pt.value / 12.0) * 0.5
         else:
-            return -0.5 - ((12.0 - att_pt.value) / 12.0) * 0.5
+            return -0.5 - (att_pt.value / 12.0) * 0.5
 
 class DQNBotLogic:
     """
-    High-fidelity adapter bridging the Pygame GUI with the MARQ Rainbow DQN.
-    Implements Formal Expectamax to refine move selection.
+    High-fidelity adapter bridging the Pygame GUI with the MARQ Rainbow DQN
+    (with Formal Expectamax) or a vec.net PolicyValueNet PPO checkpoint
+    (auto-detected from checkpoint format).
     """
     
     def __init__(self, model_path: str, player_id: int = 2, device: str = None):
         self.player_id = player_id
         self.opponent_id = 1 if player_id == 2 else 2
         self.device = torch.device(device) if device else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Initialize the full RainbowAgent
+        self.pv_net = None
+        self._pv_in_planes = 0
+        self._last_moves: Dict[int, Optional[Tuple[Tuple[int, int], Tuple[int, int]]]] = {1: None, 2: None}
+        self._last_pv_belief: Optional[np.ndarray] = None
+
+        # Resolve checkpoint path (.pt prioritized)
+        possible_pt = model_path.replace('.pth', '.pt') if model_path else None
+        resolved_path = None
+        for path in [possible_pt, model_path]:
+            if path and os.path.exists(path):
+                resolved_path = path
+                break
+
+        # Auto-detect PolicyValueNet checkpoints (e.g. runs/ppo_2/net_final.pt)
+        if resolved_path is not None:
+            pv_net = self._try_load_policy_value_net(resolved_path)
+            if pv_net is not None:
+                self.pv_net = pv_net
+                self._pv_in_planes = int(pv_net.config.get('in_planes', 59))
+                self.agent = None
+                self.expectamax = None
+                print(f" [MARQ Bot] PolicyValueNet loaded: {os.path.basename(resolved_path)} ({self._pv_in_planes} planes)")
+                return
+
+        # Default path: RainbowAgent + Formal Expectamax
         self.agent = RainbowAgent(
             player_id=player_id, 
             device=self.device, 
             use_pbs=True
         )
         
-        # Load the checkpoint (.pt prioritized)
-        possible_pt = model_path.replace('.pth', '.pt') if model_path else None
-        
-        load_success = False
-        for path in [possible_pt, model_path]:
-            if path and os.path.exists(path):
-                self.agent.load_model(path)
-                print(f" [MARQ Bot] Model loaded: {os.path.basename(path)}")
-                load_success = True
-                break
-        
-        if not load_success:
+        if resolved_path is not None:
+            self.agent.load_model(resolved_path)
+            print(f" [MARQ Bot] Model loaded: {os.path.basename(resolved_path)}")
+        else:
             print(f" [MARQ Bot] Warning: No valid model found at {model_path} or its .pt variant.")
 
         # Initialize formal Expectamax engine (4 ply depth bounded by 4 seconds)
         self.expectamax = ExpectamaxSearch(self.agent, max_depth=4, max_time=4.0)
+
+    def _try_load_policy_value_net(self, path: str):
+        """Load a vec.net PolicyValueNet if `path` matches its checkpoint schema, else return None."""
+        try:
+            ck = torch.load(path, map_location=self.device, weights_only=False)
+        except Exception:
+            return None
+        if not (isinstance(ck, dict) and 'config' in ck and 'state_dict' in ck and 'q_network_state_dict' not in ck):
+            return None
+        from vec.net import PolicyValueNet
+        net = PolicyValueNet(**ck['config']).to(self.device)
+        net.load_state_dict(ck['state_dict'])
+        net.eval()
+        return net
         
     def reset(self):
-        self.agent.reset_history()
+        self._last_moves = {1: None, 2: None}
+        self._last_pv_belief = None
+        if getattr(self, 'agent', None) is not None:
+            self.agent.reset_history()
+
+    def _pv_forward(self, gui_board, player_id: int, with_belief: bool = False):
+        """Run PolicyValueNet on one GUI board from `player_id`'s canonical frame.
+        Always returns a 3-tuple `(logits, value, belief_or_None)`."""
+        state = self._get_pv_state_representation(gui_board, player_id).unsqueeze(0).to(self.device)
+        self.pv_net.eval()
+        with torch.no_grad():
+            if with_belief:
+                logits, value, belief = self.pv_net(state, with_belief=True)
+                if player_id == self.player_id:
+                    self._last_pv_belief = torch.softmax(belief[0].float(), dim=0).cpu().numpy()
+                return logits[0].float(), float(value[0].item()), belief[0].float()
+            logits, value = self.pv_net(state, with_belief=False)
+            return logits[0].float(), float(value[0].item()), None
+
+    def _choose_pv_move(self, gui_board, current_player: int, record_move: bool = True) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+        legal_moves = self._get_gui_legal_moves(gui_board, current_player)
+        if not legal_moves:
+            return None
+        logits, _, _ = self._pv_forward(gui_board, current_player, with_belief=(current_player == self.player_id))
+        best_move = max(legal_moves, key=lambda m: logits[encode_move(m, current_player)].item())
+        if record_move:
+            if not hasattr(self, '_last_moves'):
+                self._last_moves = {1: None, 2: None}
+            self._last_moves[current_player] = best_move
+        return best_move
         
     def choose_move(self, gui_board, current_player: int) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+        if getattr(self, 'pv_net', None) is not None:
+            return self._choose_pv_move(gui_board, current_player, record_move=True)
+
         # Delegate directly to the recursive expectamax search bounded by 4 seconds
         best_move, best_score = self.expectamax.search(gui_board, current_player, self)
         
@@ -425,9 +492,13 @@ class DQNBotLogic:
     
     def get_state_evaluation(self, gui_board, player_id: int) -> float:
         """
-        Calculates board advantage using the Dueling Value Head.
+        Calculates board advantage using the Dueling Value Head (or PolicyValueNet value head).
         Positive = Advantageous for player_id.
         """
+        if getattr(self, 'pv_net', None) is not None:
+            _, value, _ = self._pv_forward(gui_board, player_id, with_belief=(player_id == self.player_id))
+            return value
+
         self.agent.q_network.eval()
         with torch.no_grad():
             state = self._get_state_representation(gui_board, player_id).unsqueeze(0).to(self.device)
@@ -441,6 +512,13 @@ class DQNBotLogic:
 
     def get_state_evaluations(self, gui_boards, player_id: int) -> List[float]:
         """get_state_evaluation of several boards in one network call."""
+        if getattr(self, 'pv_net', None) is not None:
+            self.pv_net.eval()
+            with torch.no_grad():
+                states = torch.stack([self._get_pv_state_representation(b, player_id) for b in gui_boards]).to(self.device)
+                _, values = self.pv_net(states, with_belief=False)
+                return values.float().tolist()
+
         self.agent.q_network.eval()
         with torch.no_grad():
             states = torch.stack([self._get_state_representation(b, player_id) for b in gui_boards]).to(self.device)
@@ -451,6 +529,34 @@ class DQNBotLogic:
         """
         Returns multiple move suggestions with chess.com-style classifications.
         """
+        if getattr(self, 'pv_net', None) is not None:
+            legal_moves = self._get_gui_legal_moves(gui_board, player_id)
+            if not legal_moves:
+                return []
+            logits, _, _ = self._pv_forward(gui_board, player_id, with_belief=(player_id == self.player_id))
+            legal_indices = [encode_move(m, player_id) for m in legal_moves]
+            legal_logits = logits[legal_indices]
+            probs = torch.softmax(legal_logits, dim=0)
+            move_scores = sorted(
+                [(move, float(probs[i].item())) for i, move in enumerate(legal_moves)],
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            best_score = move_scores[0][1]
+            recommendations = []
+            for i, (move, score) in enumerate(move_scores[:top_n]):
+                gap = best_score - score
+                if i == 0:
+                    label, color = "Best", (52, 211, 153)
+                elif gap < 0.1:
+                    label, color = "Excellent", (96, 165, 250)
+                elif gap < 0.3:
+                    label, color = "Good", (134, 239, 172)
+                else:
+                    label, color = "Inaccuracy", (251, 191, 36)
+                recommendations.append({'move': move, 'score': score, 'label': label, 'color': color})
+            return recommendations
+
         # Temporarily switch agent ID
         original_id = self.agent.player_id
         self.agent.player_id = player_id
@@ -512,6 +618,9 @@ class DQNBotLogic:
         """
         Suggests the best move for the human player.
         """
+        if getattr(self, 'pv_net', None) is not None:
+            return self._choose_pv_move(gui_board, player_id, record_move=False)
+
         # Temporarily switch agent ID if needed or just use current logic
         original_id = self.agent.player_id
         self.agent.player_id = player_id
@@ -525,8 +634,18 @@ class DQNBotLogic:
 
     def get_rank_probabilities(self, pos: Tuple[int, int]) -> Optional[Dict]:
         """
-        Expose AAREN's rank probabilities for a specific square.
+        Expose rank probabilities for a specific square (AAREN or PolicyValueNet belief head).
         """
+        if getattr(self, 'pv_net', None) is not None:
+            belief = getattr(self, '_last_pv_belief', None)
+            if belief is None:
+                return None
+            r, c = pos
+            if self.player_id != 1:
+                r, c = 9 - r, 9 - c
+            probs = belief[:, r * 10 + c]
+            return {PieceType(k + 1).name: float(probs[k]) for k in range(NUM_PIECE_TYPES) if probs[k] > 0.01}
+
         probs = self.agent.history.get_piece_predictions(pos) if self.agent.history else None
         if probs:
             # Convert PieceType keysto simple names/ints for GUI
@@ -535,18 +654,20 @@ class DQNBotLogic:
     
     def update_from_opponent_move(self, gui_board, from_pos: Tuple[int, int], to_pos: Tuple[int, int]):
         """
-        Update AAREN history aggregator after opponent move.
+        Update AAREN history aggregator (or PolicyValueNet last-move/belief state) after opponent move.
         """
+        if not hasattr(self, '_last_moves'):
+            self._last_moves = {1: None, 2: None}
+        self._last_moves[self.opponent_id] = (from_pos, to_pos)
+        if getattr(self, 'pv_net', None) is not None:
+            self._pv_forward(gui_board, self.player_id, with_belief=True)
+            return
         marq_grid = self._gui_board_to_marq_grid(gui_board)
         move = (from_pos, to_pos)
         self.agent.update_history_batch([move], [marq_grid], acting_player=self.opponent_id)
 
-    def _get_state_representation(self, gui_board, player_id: int = None) -> torch.Tensor:
-        """Network input for `player_id` (default: the bot) in that side's canonical frame, with
-        the same 32 planes the training environment gives (see GuiObservation). The bot's AAREN
-        history only describes the bot's opponent, so other views get none."""
-        player_id = self.player_id if player_id is None else player_id
-        observation = GuiObservation(
+    def _build_gui_observation(self, gui_board, player_id: int) -> GuiObservation:
+        return GuiObservation(
             board=self._gui_board_to_marq_grid(gui_board, player_id),
             own_revealed=self._own_revealed_mask(gui_board, player_id),
             moved=self._moved_mask(gui_board, 'moved'),
@@ -555,9 +676,75 @@ class DQNBotLogic:
             plies_since_battle=gui_board.plies_since_battle,
             max_turns=gui_board.max_turns,
             no_battle_draw_plies=gui_board.no_battle_draw_plies,
+            hidden_pool=self._hidden_pool(gui_board, player_id),
         )
+
+    def _get_pv_state_representation(self, gui_board, player_id: int = None) -> torch.Tensor:
+        """Build the 41- or 59-plane PolicyValueNet observation in `player_id`'s canonical frame,
+        matching vec/engine.py:encode."""
+        player_id = self.player_id if player_id is None else player_id
+        observation = self._build_gui_observation(gui_board, player_id)
+        base_obs = encode_observations([observation], player_id, device=self.device)[0]
+        in_planes = getattr(self, '_pv_in_planes', 59)
+        if in_planes <= base_obs.shape[0]:
+            return base_obs[:in_planes]
+
+        # Planes 41-52: hidden enemy pool / initial counts (broadcast over 10x10)
+        pool = torch.as_tensor(observation.hidden_pool, dtype=torch.float32, device=self.device)
+        initial = torch.tensor(INITIAL_COUNTS, dtype=torch.float32, device=self.device)
+        pool_planes = (pool / initial).view(12, 1, 1).expand(12, 10, 10)
+
+        # Planes 53-54: own pieces that have moved / long-moved (canonical frame)
+        own_mask = np.zeros((10, 10), dtype=bool)
+        for r, c in gui_board.owner_positions(player_id):
+            own_mask[r, c] = True
+        own_mov = to_canonical(
+            torch.from_numpy((observation.moved & own_mask).astype(np.float32)).to(self.device),
+            player_id,
+        ).unsqueeze(0)
+        own_long = to_canonical(
+            torch.from_numpy((observation.long_moved & own_mask).astype(np.float32)).to(self.device),
+            player_id,
+        ).unsqueeze(0)
+
+        # Planes 55-58: enemy last (from, to), own last (from, to) in canonical frame
+        last_planes = torch.zeros((4, 10, 10), dtype=torch.float32, device=self.device)
+        last_moves = getattr(self, '_last_moves', None) or {}
+        enemy_id = (3 - player_id) if player_id in (1, 2) else -player_id
+        for from_ch, to_ch, owner in ((0, 1, enemy_id), (2, 3, player_id)):
+            mv = last_moves.get(owner)
+            if mv is not None:
+                (fr, fc), (tr, tc) = mv
+                last_planes[from_ch, fr, fc] = 1.0
+                last_planes[to_ch, tr, tc] = 1.0
+        last_planes = to_canonical(last_planes, player_id)
+
+        full_obs = torch.cat([base_obs, pool_planes, own_mov, own_long, last_planes], dim=0)
+        return full_obs[:in_planes]
+
+    def _get_state_representation(self, gui_board, player_id: int = None) -> torch.Tensor:
+        """Network input for `player_id` (default: the bot) in that side's canonical frame, with
+        the same 41 planes the training environment gives (see GuiObservation), or 59 planes
+        when a PolicyValueNet checkpoint is loaded. The bot's AAREN history only describes the
+        bot's opponent, so other views get none."""
+        player_id = self.player_id if player_id is None else player_id
+        if getattr(self, 'pv_net', None) is not None:
+            return self._get_pv_state_representation(gui_board, player_id)
+        observation = self._build_gui_observation(gui_board, player_id)
         history = self.agent.history if player_id == self.player_id else None
         return self.agent.get_state_representation(observation, pbs_instance=history, player=player_id)
+
+    @staticmethod
+    def _hidden_pool(gui_board, viewer: int) -> np.ndarray:
+        """(12,) rank counts (PieceType value - 1) of the other side's pieces `viewer` has not
+        seen: public, since every captured piece was revealed in its battle."""
+        pool = np.zeros(12, dtype=np.float32)
+        for r in range(10):
+            for c in range(10):
+                piece = gui_board.get((r, c))
+                if piece and piece.owner != viewer and not piece.revealed:
+                    pool[GUI_RANK_TO_PIECETYPE[piece.rank].value - 1] += 1
+        return pool
 
     @staticmethod
     def _moved_mask(gui_board, flag: str) -> np.ndarray:
