@@ -12,7 +12,9 @@ import matplotlib
 matplotlib.use('Agg')
 import torch
 
-torch.set_num_threads(min(4, torch.get_num_threads()))
+# Under pytest-xdist (`-n N`) every worker is its own process: one torch thread each, so N workers
+# don't oversubscribe the cores (N x 4 threads on 16 cores made things slower, not faster).
+torch.set_num_threads(1 if os.environ.get('PYTEST_XDIST_WORKER') else min(4, torch.get_num_threads()))
 
 _PROJECT_KEY = os.path.normcase(os.path.realpath(PROJECT_ROOT))
 
@@ -21,7 +23,20 @@ def pytest_addoption(parser):
     parser.addoption("--runslow", action="store_true", help="run slow learning tests")
 
 
+# Tests that drive the frozen thesis DQN trainer (network/, train_dqn.py): ~80% of the suite's time
+# (measured 2026-11-23: ~1,600 of ~2,000 test-seconds). Marked `legacy` so day-to-day work on vec/
+# can run `-m "not legacy"`; run them whenever network/, environment/, train_dqn.py or settings/
+# change, and always run the full suite before reporting results.
+LEGACY_FILES = {
+    'test_learner.py', 'test_curriculum.py', 'test_cold_start.py', 'test_turn_handling.py',
+    'test_trainer_smoke.py', 'test_aaren_integration.py', 'test_crash_regressions.py',
+}
+
+
 def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if os.path.basename(str(item.fspath)) in LEGACY_FILES:
+            item.add_marker(pytest.mark.legacy)
     if config.getoption("--runslow"):
         return
     skip = pytest.mark.skip(reason="slow; use --runslow")
@@ -33,6 +48,19 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def cpu():
     return torch.device('cpu')
+
+
+@pytest.fixture(autouse=True)
+def _same_random_state_for_every_test():
+    """Every test starts from the same global RNG state, whatever ran before it in the process.
+    Without this, a test using unseeded setups (env.reset()) passed or failed depending on test
+    order, which pytest-xdist changes from run to run (test_learner's random game once ended early)."""
+    import random
+    import numpy as np
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    yield
 
 
 @pytest.fixture(autouse=True)

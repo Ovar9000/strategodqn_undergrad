@@ -541,8 +541,14 @@ def run_tournament(
     no_battle_plies: int = 200,
     log_fn=print,
     progress_path: Optional[str] = None,
+    existing_pairs: Optional[Sequence[Dict]] = None,
 ) -> Dict:
-    """Run a full round-robin across `roster` over `seeds` setup banks and fit Elo + CIs."""
+    """Run a full round-robin across `roster` over `seeds` setup banks and fit Elo + CIs.
+
+    If `existing_pairs` is provided, any unordered pair (a, b) already present is reused
+    without replaying it (so new players can be added onto a completed ladder on the exact
+    same setup banks and seeds).
+    """
     seeds = [int(s) for s in seeds]
     if not seeds:
         raise ValueError("Need at least one setup-bank seed")
@@ -557,6 +563,11 @@ def run_tournament(
     names = [e['name'] for e in roster]
     k = len(names)
     total_pairs = k * (k - 1) // 2
+    reused_map: Dict[Tuple[str, str], Dict] = {}
+    if existing_pairs:
+        for rec in existing_pairs:
+            reused_map[(rec['a'], rec['b'])] = rec
+            reused_map[(rec['b'], rec['a'])] = rec
     pairs: List[Dict] = []
     t0 = time.time()
     pair_idx = 0
@@ -565,6 +576,9 @@ def run_tournament(
         for j in range(i + 1, k):
             pair_idx += 1
             na, nb = names[i], names[j]
+            if (na, nb) in reused_map:
+                pairs.append(reused_map[(na, nb)])
+                continue
             pa, pb = policies[na], policies[nb]
             per_seed_records = []
             tot_w = tot_l = tot_d = 0
@@ -654,6 +668,8 @@ def _player_color(name: str) -> str:
         return '#d95f02'
     if name.startswith('pv_clone'):
         return '#7570b3'
+    if name.startswith('ppo_5') or name.startswith('ppo_6'):
+        return '#e7298a'
     if name == 'ppo_4':
         return '#1b9e77'
     return '#386cb0'
@@ -767,6 +783,9 @@ def main(argv=None):
     ap.add_argument('--max-plies', type=int, default=1500)
     ap.add_argument('--no-battle-plies', type=int, default=200)
     ap.add_argument('--device', default=None, help='cuda or cpu (default: cuda if available else cpu)')
+    ap.add_argument('--extend', default=None, help='Existing ladder.json to extend (reuses all previously played pairs)')
+    ap.add_argument('--add', nargs='*', default=[], metavar='NAME=CKPT',
+                    help='Extra net players to add to the roster (NAME=path/to/net.pt)')
     ap.add_argument('--replot', action='store_true', help='Re-fit Elo/CIs and redraw ladder.png from existing ladder.json')
     args = ap.parse_args(argv)
 
@@ -790,7 +809,27 @@ def main(argv=None):
         return prev
 
     dev = torch.device(args.device if args.device else ('cuda' if torch.cuda.is_available() else 'cpu'))
-    roster = default_roster(args.runs_dir, args.styles)
+    existing_pairs = None
+    if args.extend:
+        with open(args.extend) as f:
+            prev = json.load(f)
+        roster = list(prev['players'])
+        existing_pairs = list(prev['pairs'])
+        cfg_prev = prev['config']
+        args.games = int(cfg_prev['games_per_pair'])
+        args.seeds = [int(s) for s in cfg_prev['seeds']]
+        args.bank_size = int(cfg_prev['bank_size'])
+        args.temperature = float(cfg_prev['temperature'])
+    else:
+        roster = default_roster(args.runs_dir, args.styles)
+    seen_names = {p['name'] for p in roster}
+    for spec in (args.add or []):
+        if '=' not in spec:
+            raise ValueError(f"--add must be NAME=CKPT, got {spec!r}")
+        nm, path = spec.split('=', 1)
+        if nm not in seen_names:
+            roster.append({'name': nm, 'kind': 'net', 'spec': path})
+            seen_names.add(nm)
     with open(log_path, 'w') as log_f:
         def say(msg: str):
             print(msg, flush=True)
@@ -816,6 +855,7 @@ def main(argv=None):
             no_battle_plies=args.no_battle_plies,
             log_fn=say,
             progress_path=json_path,
+            existing_pairs=existing_pairs,
         )
         with open(json_path, 'w') as f:
             json.dump(result, f, indent=2)

@@ -78,15 +78,24 @@ def masked_logits(logits: torch.Tensor, legal: torch.Tensor) -> torch.Tensor:
 
 
 class NetPolicy:
-    """A network as an arena policy: greedy, or sampling at `temperature`."""
+    """A network as an arena policy: greedy, or sampling at `temperature`.
 
-    def __init__(self, net: PolicyValueNet, temperature: float = 0.0, name: str = 'net', amp: bool = True):
-        self.net, self.temperature, self.name, self.amp = net, temperature, name, amp
+    When ``safe=True``, applies the play-time safety filter (``vec.safety.safe_mask_for_env``)
+    after the network's forward pass (never used during training).
+    """
+
+    def __init__(self, net: PolicyValueNet, temperature: float = 0.0, name: str = 'net',
+                 amp: bool = True, safe: bool = False):
+        self.net, self.temperature, self.name, self.amp, self.safe = net, temperature, name, amp, safe
 
     @torch.no_grad()
     def act(self, env: VecStratego, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
         obs, _ = env.observe(idx)
-        legal = env.legal if idx is None else env.legal[idx]
+        if self.safe:
+            from vec.safety import safe_mask_for_env
+            legal = safe_mask_for_env(env, idx)
+        else:
+            legal = env.legal if idx is None else env.legal[idx]
         self.net.eval()
         with torch.autocast('cuda', enabled=self.amp and obs.is_cuda):
             logits, _ = self.net(obs.contiguous(memory_format=torch.channels_last))

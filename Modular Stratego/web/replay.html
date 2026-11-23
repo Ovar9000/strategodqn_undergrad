@@ -7,61 +7,77 @@
 <meta name="description" content="Step through recorded Stratego games with fog-of-war views, policy top-5 probabilities, value curve, belief overlays, and sure-loss blunder jumps.">
 <style>
 :root {
-  --bg: #f6f4ef;
-  --surface: #ffffff;
-  --surface-2: #efece4;
-  --text: #1f2328;
-  --muted: #5f6670;
-  --border: #d9d4c7;
-  --accent: #2f6fb3;
-  --board-light: #d9c79a;
-  --board-dark: #cdb984;
-  --lake: #6e9fc6;
-  --lake-edge: #5b8db5;
-  --me: #b8322a;
-  --me-text: #ffffff;
-  --bot: #2b5c96;
-  --bot-text: #ffffff;
-  --select: #f2c94c;
-  --last: rgba(242, 201, 76, 0.55);
-  --blunder: #d62728;
-  --blunder-bg: rgba(214, 39, 40, 0.14);
-  --blunder-sq: rgba(214, 39, 40, 0.45);
-  --win: #2e7d32;
-  --lose: #b8322a;
-  --warn: #c47a00;
-  --shadow: 0 1px 2px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+  color-scheme: light dark;
+  --bg: #f1e8d6;
+  --surface: #faf4e6;
+  --surface-2: #ede1c9;
+  --text: #241911;
+  --muted: #645341;
+  --border: #c9b595;
+  --accent: #9c2720;
+  --wood-frame: #4a2a19;
+  --wood-grout: #361e12;
+  --board-light: #ddc596;
+  --board-dark: #c5a56c;
+  --lake: #245e78;
+  --lake-edge: #e2c58d;
+  --me: #9c2720;
+  --me-deep: #741a15;
+  --me-text: #fbf2dc;
+  --bot: #1e466e;
+  --bot-deep: #14304d;
+  --bot-text: #fbf2dc;
+  --select: #e3b23c;
+  --last: rgba(227, 178, 60, 0.46);
+  --blunder: #c92626;
+  --blunder-bg: rgba(201, 38, 38, 0.14);
+  --blunder-sq: rgba(201, 38, 38, 0.44);
+  --win: #2b6e35;
+  --lose: #9c2720;
+  --warn: #b86f09;
+  --shadow: 0 2px 3px rgba(38,20,10,.18), 0 4px 10px rgba(38,20,10,.08);
+  --tex-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%235a3d20' stroke-opacity='.07' stroke-linecap='round'%3E%3Cpath d='M6 19q16-5 31 2M54 9q20 6 39-3M82 36q18 4 32-5M11 64q24-6 43 4M67 74q19-7 41 2M18 103q26 5 49-4M79 111q18-4 34 3' stroke-width='1.1'/%3E%3Cpath d='M25 32l7 2M92 58l-8 3M44 88l9-2M103 22l5 4M15 47l6-3M62 48l-7 2' stroke-width='.9'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-banig-a: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Cg fill='none' stroke='%236c4c26' stroke-linecap='round'%3E%3Cpath d='M0 6.5q9-1.2 18 .6t18-.4M0 18.4q10 1 18-.5t18 .6M0 30.2q8-.9 18 .7t18-.8' stroke-opacity='.17' stroke-width='1.1'/%3E%3Cpath d='M6.3 0q1.1 9-.5 18t.7 18M18.2 0q-.9 10 .6 18t-.8 18M30.4 0q.8 9-.6 18t.7 18' stroke-opacity='.15' stroke-width='1.1'/%3E%3Cpath d='M1 1h15v15H1zM19 19h15v15H19z' fill='%23fff6de' fill-opacity='.13' stroke='none'/%3E%3Cpath d='M3 13l9-1M21 31l10-1.2M13 4l-1 8M31 21l-1 9' stroke-opacity='.12' stroke-width='.9'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-banig-b: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Cg fill='none' stroke='%234f3417' stroke-linecap='round'%3E%3Cpath d='M0 5.8q10 1.2 18-.6t18 .7M0 17.6q9-1 18 .6t18-.7M0 29.8q11 .9 18-.6t18 .5' stroke-opacity='.21' stroke-width='1.15'/%3E%3Cpath d='M5.8 0q-1 9 .6 18t-.7 18M17.7 0q1 9-.5 18t.8 18M29.6 0q-.9 10 .6 18t-.7 18' stroke-opacity='.19' stroke-width='1.15'/%3E%3Cpath d='M18 1h16v16H18zM1 18h16v16H1z' fill='%233d240d' fill-opacity='.09' stroke='none'/%3E%3Cpath d='M3 3l11 11M20 20l12 12M15 21l-10 10M32 4l-10 10' stroke-opacity='.09' stroke-width='.9'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-lake: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44' viewBox='0 0 44 44'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M2 11c5-4 10-4 15 0s10 4 15 0 7-3 10-1' stroke='%23d8f0f8' stroke-opacity='.34' stroke-width='1.6'/%3E%3Cpath d='M-2 23c6-4 11-4 16 0s9 4 15 0 10-3 15 1' stroke='%230c2a3a' stroke-opacity='.32' stroke-width='1.5'/%3E%3Cpath d='M4 35c5-4 10-3 14 0s10 3 15-1 6-2 9 0' stroke='%23d8f0f8' stroke-opacity='.28' stroke-width='1.4'/%3E%3Cpath d='M14 8c2-2 4-1 3 1M32 29c2-2 5-1 3 2M7 29c2-1 4 0 3 2' stroke='%23e8f7fc' stroke-opacity='.32' stroke-width='1.1'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-wood: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M0 7q15-2 28 1t20-1M0 19q12 2 25-1t23 1M0 32q17-2 30 1t18-1M0 43q14 2 29-1t19 1' stroke='%23fff0cf' stroke-opacity='.11' stroke-width='1.1'/%3E%3Cpath d='M0 12q14 2 27-1t21 1M0 26q16-2 29 1t19-2M0 38q13 1 26-1t22 2' stroke='%23160804' stroke-opacity='.18' stroke-width='1.2'/%3E%3C/g%3E%3C/svg%3E");
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #15171a;
-    --surface: #1e2125;
-    --surface-2: #262a2f;
-    --text: #e8e6e1;
-    --muted: #a0a6ad;
-    --border: #353a40;
-    --accent: #6ea8e6;
-    --board-light: #8c7a52;
-    --board-dark: #81704a;
-    --lake: #3b6488;
-    --lake-edge: #33597a;
-    --me: #c9473e;
-    --bot: #3d74b3;
-    --select: #e0b83f;
-    --last: rgba(224, 184, 63, 0.45);
-    --blunder: #ff5252;
-    --blunder-bg: rgba(255, 82, 82, 0.16);
-    --blunder-sq: rgba(255, 82, 82, 0.42);
-    --win: #66bb6a;
-    --lose: #ef6b62;
+    --bg: #171310;
+    --surface: #221c17;
+    --surface-2: #2d251e;
+    --text: #efe5d2;
+    --muted: #b5a68e;
+    --border: #4a3c2e;
+    --accent: #d45b4a;
+    --wood-frame: #3a2114;
+    --wood-grout: #21120a;
+    --board-light: #826b45;
+    --board-dark: #6c5636;
+    --lake: #1b4b61;
+    --lake-edge: #9f8659;
+    --me: #ad3229;
+    --me-deep: #7f1e18;
+    --bot: #275887;
+    --bot-deep: #183a5c;
+    --select: #e6b843;
+    --last: rgba(230, 184, 67, 0.42);
+    --blunder: #ff5c5c;
+    --blunder-bg: rgba(255, 92, 92, 0.16);
+    --blunder-sq: rgba(255, 92, 92, 0.42);
+    --win: #6cc474;
+    --lose: #ef6e63;
     --warn: #f0ad4e;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+    --shadow: 0 2px 4px rgba(0,0,0,.45), 0 4px 12px rgba(0,0,0,.32);
+    --tex-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%23ebd2a5' stroke-opacity='.045' stroke-linecap='round'%3E%3Cpath d='M6 19q16-5 31 2M54 9q20 6 39-3M82 36q18 4 32-5M11 64q24-6 43 4M67 74q19-7 41 2M18 103q26 5 49-4M79 111q18-4 34 3' stroke-width='1.1'/%3E%3C/g%3E%3C/svg%3E");
   }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: var(--tex-paper);
   color: var(--text);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -94,12 +110,29 @@ h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
 .status .msg.win { color: var(--win); }
 .status .counters { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.battle-banner {
-  display: none; margin-bottom: 8px; padding: 7px 10px; border-radius: 7px; font-size: 13px;
-  background: var(--surface-2); border: 1px solid var(--border);
+.kpi-strip {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-bottom: 8px;
 }
-.battle-banner.show { display: block; }
-.battle-banner.blunder { background: var(--blunder-bg); border-color: var(--blunder); }
+@media (max-width: 640px) { .kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpi {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px;
+  padding: 6px 8px; font-variant-numeric: tabular-nums; min-width: 0;
+}
+.kpi .k { font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: .4px; white-space: nowrap; overflow: clip; text-overflow: ellipsis; }
+.kpi .v { font-size: 15px; font-weight: 700; margin-top: 1px; line-height: 1.2; }
+.kpi .v.pos { color: var(--win); }
+.kpi .v.neg { color: var(--lose); }
+.kpi .subv { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: clip; text-overflow: ellipsis; }
+
+.battle-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 36px; margin-bottom: 8px; padding: 6px 10px; border-radius: 7px; font-size: 12.5px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+}
+.battle-banner.show {
+  background: rgba(196, 122, 0, 0.11); border-color: rgba(196, 122, 0, 0.45); color: var(--text);
+}
+.battle-banner.blunder { background: var(--blunder-bg); border-color: var(--blunder); color: var(--text); }
 .badge {
   display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px;
   border-radius: 4px; vertical-align: middle; margin-right: 6px; letter-spacing: .3px;
@@ -110,55 +143,124 @@ h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
 
 .board-shell { position: relative; max-width: 620px; margin: 0 auto; }
 .board {
-  display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-rows: repeat(10, minmax(0, 1fr));
+  gap: 2px;
   width: 100%; aspect-ratio: 1;
-  background: var(--border); border: 2px solid var(--border); border-radius: 6px; overflow: hidden;
+  background-color: var(--wood-grout);
+  background-image: var(--tex-wood);
+  border: 6px solid var(--wood-frame);
+  border-radius: 9px 7px 10px 8px / 8px 10px 7px 9px;
+  box-shadow: inset 0 0 0 1px rgba(245, 222, 179, 0.22), 0 6px 18px rgba(34, 18, 9, 0.26);
+  overflow: clip;
   user-select: none;
 }
+.move-arrow-svg {
+  position: absolute; inset: 6px; width: calc(100% - 12px); height: calc(100% - 12px);
+  pointer-events: none; z-index: 3; display: block;
+}
 .sq {
-  position: relative; border: 0; padding: 0; margin: 0; background: var(--board-light);
+  position: relative; min-width: 0; min-height: 0; overflow: clip;
+  border: 0; padding: 0; margin: 0;
+  background-color: var(--board-light);
+  background-image: var(--tex-banig-a);
+  background-size: 36px 36px;
+  box-shadow: inset 0 0 0 1px rgba(68, 42, 18, 0.14);
   display: flex; align-items: center; justify-content: center; font: inherit; color: inherit;
   cursor: pointer;
 }
-.sq.alt { background: var(--board-dark); }
-.sq.lake { background: var(--lake); box-shadow: inset 0 0 0 1px var(--lake-edge); cursor: default; }
+.sq.alt {
+  background-color: var(--board-dark);
+  background-image: var(--tex-banig-b);
+}
+.sq.lake {
+  background-color: var(--lake);
+  background-image: var(--tex-lake);
+  background-size: 44px 44px;
+  box-shadow: inset 0 0 0 2px rgba(226, 197, 141, 0.42), inset 0 0 10px rgba(8, 28, 40, 0.45);
+  cursor: default;
+}
 .sq.last::after { content: ""; position: absolute; inset: 0; background: var(--last); pointer-events: none; z-index: 0; }
 .sq.blunder-sq::after { content: ""; position: absolute; inset: 0; background: var(--blunder-sq); pointer-events: none; z-index: 0; }
 .sq.inspected { box-shadow: inset 0 0 0 3px var(--select); }
 .sq-coord {
-  position: absolute; top: 1px; left: 2px; font-size: 8px; opacity: .5;
-  pointer-events: none; line-height: 1; z-index: 0;
+  position: absolute; top: 1px; left: 2px; font-size: 8px; font-weight: 700; opacity: .62;
+  pointer-events: none; line-height: 1; z-index: 1;
 }
 
 .piece {
-  position: relative; z-index: 1; width: 84%; height: 84%; border-radius: 6px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-weight: 700; font-size: clamp(11px, 2.3vw, 19px); line-height: 1; box-shadow: var(--shadow);
+  position: relative; z-index: 2; width: 86%; height: 86%;
+  border-radius: 5px 7px 6px 4px / 6px 4px 7px 5px;
+  border: 1.5px solid rgba(25, 11, 5, 0.48);
+  display: flex; align-items: center; justify-content: center;
+  background-image: var(--tex-wood);
+  background-size: 48px 48px;
+  box-shadow: inset 0 1.5px 0 rgba(255, 240, 205, 0.26), inset 0 -2px 0 rgba(18, 7, 3, 0.42), 0 2px 4px rgba(22, 10, 4, 0.34);
+  translate: 0 0; rotate: 0deg; scale: 1;
 }
-.piece small { font-size: clamp(7px, 1.1vw, 9.5px); font-weight: 600; opacity: .88; margin-top: 2px; letter-spacing: .2px; }
-.piece.red { background: var(--me); color: var(--me-text); }
-.piece.blue { background: var(--bot); color: var(--bot-text); }
+.piece .rk {
+  position: absolute; top: 2px; left: 3px;
+  font-weight: 800; font-size: clamp(9px, 1.45vw, 12px); line-height: 1;
+  letter-spacing: -0.2px; text-shadow: 0 1px 1px rgba(15, 6, 3, 0.65);
+  pointer-events: none;
+}
+.piece .emblem {
+  width: 68%; height: 68%; margin-top: 6%; margin-left: 6%;
+  display: block; flex-shrink: 0; pointer-events: none;
+  filter: drop-shadow(0 1px 0 rgba(18, 7, 3, 0.55));
+}
+.piece.hidden .emblem {
+  width: 74%; height: 74%; margin: 0; opacity: .88;
+}
+.clash-ring {
+  position: absolute; inset: 6%; border-radius: 50%;
+  border: 3px solid rgba(227, 178, 60, 0.94);
+  pointer-events: none; z-index: 4; opacity: 0; scale: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .piece.glide { transition: translate var(--glide-ms, 210ms) cubic-bezier(.22, 1, .36, 1); z-index: 5; }
+  .clash-ring { animation: clashRing 400ms ease-out forwards; }
+}
+@keyframes clashRing {
+  0% { opacity: 0.9; scale: 0.55; }
+  100% { opacity: 0; scale: 1.42; }
+}
+.piece.red { background-color: var(--me); color: var(--me-text); }
+.piece.blue { background-color: var(--bot); color: var(--bot-text); }
 .piece.hidden.red {
-  background: repeating-linear-gradient(45deg, var(--me), var(--me) 6px, color-mix(in srgb, var(--me) 78%, #000) 6px, color-mix(in srgb, var(--me) 78%, #000) 12px);
+  background-color: var(--me-deep);
+  background-image: var(--tex-wood);
+  color: #ebd7b2;
 }
 .piece.hidden.blue {
-  background: repeating-linear-gradient(45deg, var(--bot), var(--bot) 6px, color-mix(in srgb, var(--bot) 78%, #000) 6px, color-mix(in srgb, var(--bot) 78%, #000) 12px);
+  background-color: var(--bot-deep);
+  background-image: var(--tex-wood);
+  color: #e6d5b2;
 }
-.piece.revealed-mark { outline: 2px dashed rgba(255, 255, 255, .82); outline-offset: -3px; }
+.piece.revealed-mark { outline: 2px dashed rgba(251, 242, 220, .86); outline-offset: -3px; }
 .piece.moved-dot::before {
   content: ""; position: absolute; top: 3px; right: 3px; width: 5px; height: 5px;
-  border-radius: 50%; background: rgba(255, 255, 255, .75);
+  border-radius: 50%; background: rgba(251, 242, 220, .85);
 }
 
 .belief-tag {
-  position: absolute; bottom: 1px; right: 1px; left: 1px; z-index: 2;
+  position: absolute; bottom: 1px; right: 1px; left: 1px; z-index: 3;
   font-size: clamp(7px, 1.05vw, 9.5px); font-weight: 700; line-height: 1.15;
   text-align: center; border-radius: 3px; padding: 1px 2px;
-  background: rgba(15, 20, 26, 0.82); color: #fff; pointer-events: none;
+  background: rgba(22, 14, 8, 0.86); color: #fbf2dc; pointer-events: none;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.belief-tag.hit { background: rgba(34, 130, 52, 0.9); }
-.belief-tag.miss { background: rgba(185, 88, 12, 0.9); }
+.belief-tag.hit { background: rgba(34, 120, 48, 0.92); }
+.belief-tag.miss { background: rgba(176, 82, 12, 0.92); }
+
+@media (forced-colors: active) {
+  .board { border: 3px solid CanvasText; }
+  .sq { border: 1px solid CanvasText; }
+  .sq.lake { border: 2px dashed Highlight; }
+  .piece { border: 2px solid ButtonText; forced-color-adjust: auto; }
+  .sq.inspected { outline: 3px solid Highlight; }
+}
 
 .controls { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -231,8 +333,34 @@ select {
 .belief-bars li { display: grid; grid-template-columns: 78px 1fr 44px; align-items: center; gap: 6px; margin: 3px 0; }
 .belief-bars li.true-row { font-weight: 700; color: var(--win); }
 
+.balance-bar {
+  display: flex; height: 9px; border-radius: 5px; overflow: clip;
+  background: var(--border); margin-bottom: 8px;
+}
+.bal-red { background: var(--me); transition: width 160ms ease; }
+.bal-blue { background: var(--bot); transition: width 160ms ease; }
+.army-grid {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px;
+  font-size: 11.5px; font-variant-numeric: tabular-nums; text-align: center;
+}
+.army-cell {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 4px 2px;
+}
+.army-cell .r { font-weight: 700; font-size: 11.5px; }
+.army-cell .c { font-size: 10.5px; margin-top: 1px; }
+.c-red { color: var(--me); font-weight: 700; }
+.c-blue { color: var(--bot); font-weight: 700; }
+
+.stat-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.stat-table th, .stat-table td { text-align: right; padding: 4px 4px; border-bottom: 1px solid var(--border); }
+.stat-table th { color: var(--muted); font-weight: 600; font-size: 11px; }
+.stat-table th:first-child, .stat-table td:first-child { text-align: left; }
+.stat-table tr:last-child td { border-bottom: 0; }
+
 .move-log {
-  max-height: 210px; overflow: auto; font-size: 12.5px; margin: 0; padding: 0;
+  max-height: 210px; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain;
+  font-size: 12.5px; margin: 0; padding: 0;
   list-style: none; font-variant-numeric: tabular-nums;
 }
 .move-log li {
@@ -254,6 +382,102 @@ select {
 </style>
 </head>
 <body>
+<!-- Hand-carved Philippine woodcut piece emblems (100% inline, zero external assets) -->
+<svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- 1: Flag — Araw ng Kalayaan banner -->
+    <symbol id="ph-rank-1" viewBox="0 0 32 32">
+      <path d="M7.5 28.5 L8.6 5.2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M9 6.5 L26.8 8.3 L23.2 13.8 L26.5 19.2 L8.6 18.4 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      <circle cx="15.8" cy="12.7" r="2.6" fill="currentColor"/>
+      <path d="M15.8 8.4v1.4M15.8 15.6v1.4M11.6 12.7h1.4M18.6 12.7h1.4M12.8 9.8l1 1M17.8 14.8l1 1M18.8 9.8l-1 1M13.8 14.8l-1 1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+    </symbol>
+    <!-- 2: Spy — Woven Salakot hat & shadowed eyes -->
+    <symbol id="ph-rank-2" viewBox="0 0 32 32">
+      <path d="M15.6 5.2 L16.3 8.1" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M3.2 18.2 L15.8 7.6 L28.8 17.6 Q16.2 21.8 3.2 18.2 Z" fill="currentColor"/>
+      <path d="M9.5 13.8 L14 16.4 M22 13.6 L17.6 16.4" stroke="rgba(20,8,4,0.45)" stroke-width="1.3" stroke-linecap="round"/>
+      <path d="M8.5 22.8 Q11.8 20.6 14.6 22.8 Q11.8 24.7 8.5 22.8 Z M17.5 22.8 Q20.4 20.6 23.6 22.8 Q20.4 24.7 17.5 22.8 Z" fill="currentColor"/>
+      <path d="M7.2 27.6 Q16 24.8 24.8 27.6" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+    </symbol>
+    <!-- 3: Scout — Haribon (Philippine Eagle) -->
+    <symbol id="ph-rank-3" viewBox="0 0 32 32">
+      <path d="M6.5 25.5 C7.5 18 9.5 12.5 13 10 L8 7.5 L12.8 8 L11 4.2 L15.6 7.5 L18 4.6 L18.4 8.8 C21.5 9.6 23.6 11.4 24.5 13.4 L28.6 15.2 L24.5 17.8 C23.8 19.6 22.2 18.6 20.8 17.6 L19.6 26.2 L15.4 23.5 L12.2 26.8 L10.2 23.2 Z" fill="currentColor"/>
+      <circle cx="19.6" cy="13.2" r="1.5" fill="rgba(22,10,4,0.85)"/>
+      <path d="M10.4 17.5 L15.6 15.8 M10 20.8 L15.8 19" stroke="rgba(22,10,4,0.5)" stroke-width="1.4" stroke-linecap="round"/>
+    </symbol>
+    <!-- 4: Miner — Hand-forged Itak (Bolo) & Sapper Pick -->
+    <symbol id="ph-rank-4" viewBox="0 0 32 32">
+      <path d="M6.5 25.2 L11.5 20.4 L23.8 6.8 C26.6 9.8 24.2 15.2 18.6 19.2 L13.4 22.6 Z" fill="currentColor"/>
+      <path d="M5.4 26.6 L9.6 22.4" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      <path d="M9.4 9.6 L25.2 25.6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M5.2 14.4 Q10.2 6.8 18.4 6.6" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+    </symbol>
+    <!-- 5: Sergeant — Three hand-brushed chevrons -->
+    <symbol id="ph-rank-5" viewBox="0 0 32 32">
+      <path d="M6.5 13.2 L16.2 6.6 L25.6 12.8" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6.2 19.6 L16 12.9 L25.9 19.2" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6.6 26 L16.1 19.4 L25.5 25.6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <!-- 6: Lieutenant — Carved Barong 8-point Tala star -->
+    <symbol id="ph-rank-6" viewBox="0 0 32 32">
+      <path d="M16 4.2 L18.8 12.6 L27.6 15.8 L18.6 19 L16.2 27.8 L13.2 19.1 L4.4 16.2 L13.4 12.8 Z" fill="currentColor"/>
+      <path d="M8.6 8.6 L13.6 13.6 M23.4 8.8 L18.4 13.6 M8.8 23.4 L13.6 18.6 M23.2 23.2 L18.4 18.6" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/>
+      <circle cx="16" cy="16" r="2.2" fill="rgba(22,10,4,0.62)"/>
+    </symbol>
+    <!-- 7: Captain — Crossed wavy Kalis / Kris blades -->
+    <symbol id="ph-rank-7" viewBox="0 0 32 32">
+      <path d="M7.5 24.5 C9.5 21 12.2 20.5 13.6 18 C15 15.6 17.5 15.2 19 12.5 C20.4 10 23.2 9.4 25.5 6.2" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      <path d="M24.5 24.5 C22.5 21 19.8 20.5 18.4 18 C17 15.6 14.5 15.2 13 12.5 C11.6 10 8.8 9.4 6.5 6.2" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      <path d="M5.5 22 L10.5 26.8 M26.5 22 L21.5 26.8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    </symbol>
+    <!-- 8: Major — Carved Sampaguita / Okir rosette -->
+    <symbol id="ph-rank-8" viewBox="0 0 32 32">
+      <path d="M16 5.2 C19 8.2 19 12.4 16 14.8 C13 12.4 13 8.2 16 5.2 Z" fill="currentColor"/>
+      <path d="M26.2 12.8 C24.2 16.4 20.2 17.6 17.2 15.6 C18.8 12.2 22.4 10.8 26.2 12.8 Z" fill="currentColor"/>
+      <path d="M22.4 25.2 C18.2 24.8 16.2 21.4 16.8 17.6 C20.6 18 23.2 21 22.4 25.2 Z" fill="currentColor"/>
+      <path d="M9.6 25.2 C8.8 21 11.4 18 15.2 17.6 C15.8 21.4 13.8 24.8 9.6 25.2 Z" fill="currentColor"/>
+      <path d="M5.8 12.8 C9.6 10.8 13.2 12.2 14.8 15.6 C11.8 17.6 7.8 16.4 5.8 12.8 Z" fill="currentColor"/>
+      <circle cx="16" cy="16.2" r="2.7" fill="rgba(22,10,4,0.72)"/>
+    </symbol>
+    <!-- 9: Colonel — Kalasag tribal shield & Kampilan blade -->
+    <symbol id="ph-rank-9" viewBox="0 0 32 32">
+      <path d="M16.2 3.8 L18.5 7.2 L16.8 9.5 L15.5 9.5 L14.2 6.8 Z" fill="currentColor"/>
+      <path d="M10 8.5 Q16 6.8 22 8.5 L20.2 16 L22.2 23.4 Q16 27.6 9.8 23.4 L11.8 16 Z" fill="currentColor"/>
+      <path d="M16 9.4 V24.2 M11.8 16 H20.2" stroke="rgba(22,10,4,0.65)" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M14.2 26.5 L16 28.8 L17.8 26.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <!-- 10: General — Twin Katipunan Stars (Heneral) -->
+    <symbol id="ph-rank-10" viewBox="0 0 32 32">
+      <path d="M9.6 7.8 L11.3 12.4 L16 12.6 L12.3 15.5 L13.6 20 L9.6 17.3 L5.6 20 L6.9 15.5 L3.2 12.6 L7.9 12.4 Z" fill="currentColor"/>
+      <path d="M22.4 7.8 L24.1 12.4 L28.8 12.6 L25.1 15.5 L26.4 20 L22.4 17.3 L18.4 20 L19.7 15.5 L16 12.6 L20.7 12.4 Z" fill="currentColor"/>
+      <path d="M6.4 24.4 Q16 28.2 25.6 24.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+    </symbol>
+    <!-- 11: Marshal — Supremo Sun-Crown & Three Stars -->
+    <symbol id="ph-rank-11" viewBox="0 0 32 32">
+      <circle cx="16" cy="7.4" r="2" fill="currentColor"/>
+      <circle cx="8.2" cy="10.2" r="1.7" fill="currentColor"/>
+      <circle cx="23.8" cy="10.2" r="1.7" fill="currentColor"/>
+      <path d="M5.8 24.8 L7.4 14.4 L12.4 18.6 L16 12.4 L19.6 18.6 L24.6 14.4 L26.2 24.8 Z" fill="currentColor"/>
+      <path d="M6.6 27.6 H25.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <circle cx="16" cy="21" r="2" fill="rgba(22,10,4,0.68)"/>
+    </symbol>
+    <!-- 12: Bomb — Spiked Lantaka / Mayon Mine -->
+    <symbol id="ph-rank-12" viewBox="0 0 32 32">
+      <circle cx="14.6" cy="18.2" r="7.4" fill="currentColor"/>
+      <path d="M14.6 8.4V11M14.6 25.4V28M4.8 18.2H7.4M21.8 18.2H24.4M8.2 11.8L10 13.6M19.4 22.8L21.2 24.6M8.2 24.6L10 22.8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M19.4 12.8 Q22.2 8.2 26 8.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M26.5 5 L27 7.6 M29.4 8.2 L27.2 8.8 M28.2 11.4 L26.4 9.8 M24.2 5.8 L25.6 7.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <!-- Hidden piece back — Kalinga / Banig carved diamond woodblock -->
+    <symbol id="ph-hidden" viewBox="0 0 32 32">
+      <path d="M16 4.5 L27.5 16 L16 27.5 L4.5 16 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      <path d="M16 9.6 L22.4 16 L16 22.4 L9.6 16 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M16 13.4 L18.6 16 L16 18.6 L13.4 16 Z" fill="currentColor"/>
+      <path d="M5.5 5.5 L9.5 6.2 L6.2 9.5 Z M26.5 5.5 L25.8 9.5 L22.5 6.2 Z M5.5 26.5 L6.2 22.5 L9.5 25.8 Z M26.5 26.5 L22.5 25.8 L25.8 22.5 Z" fill="currentColor"/>
+    </symbol>
+  </defs>
+</svg>
 <div class="drop-overlay" id="dropOverlay">Drop Stratego replay .json to inspect</div>
 
 <div class="wrap">
@@ -278,10 +502,17 @@ select {
         <span class="msg" id="statusMsg">Load a replay JSON file (or drag &amp; drop anywhere on this page).</span>
         <span class="counters" id="counters"></span>
       </div>
-      <div class="battle-banner" id="battleBanner"></div>
+      <div class="kpi-strip" id="kpiStrip" aria-label="Live match telemetry">
+        <div class="kpi"><div class="k">Value (Red POV)</div><div class="v" id="kpiVal">–</div><div class="subv" id="kpiValSub">ΔV – · win –</div></div>
+        <div class="kpi"><div class="k">Policy Focus</div><div class="v" id="kpiPol">–</div><div class="subv" id="kpiPolSub">Top-1 · H –</div></div>
+        <div class="kpi"><div class="k">Belief Acc (Game)</div><div class="v" id="kpiBel">–</div><div class="subv" id="kpiBelSub">cumul. hidden</div></div>
+        <div class="kpi"><div class="k">Draw Clock</div><div class="v" id="kpiClk">0 / 200</div><div class="subv" id="kpiClkSub">Ply 0 · 0 battles</div></div>
+      </div>
+      <div class="battle-banner" id="battleBanner"><span>No battle on this ply.</span></div>
 
       <div class="board-shell">
         <div class="board" id="board" role="grid" aria-label="Stratego board"></div>
+        <svg class="move-arrow-svg" id="moveArrowSvg" viewBox="0 0 1000 1000" aria-hidden="true"></svg>
       </div>
 
       <div class="controls">
@@ -349,6 +580,20 @@ select {
           <dt>Status</dt><dd>No replay loaded</dd>
         </dl>
         <div class="blunder-chips" id="blunderChips"></div>
+      </div>
+
+      <div class="card">
+        <h2>Army &amp; Material Balance <span id="armySummary" style="font-weight:600;text-transform:none"></span></h2>
+        <div class="balance-bar"><div class="bal-red" id="armyBarRed" style="width:50%"></div><div class="bal-blue" id="armyBarBlue" style="width:50%"></div></div>
+        <div class="army-grid" id="armyGrid"></div>
+      </div>
+
+      <div class="card">
+        <h2>Cumulative Battle Breakdown <span id="battleStatsTag" style="font-weight:600;text-transform:none"></span></h2>
+        <table class="stat-table">
+          <thead><tr><th>Target</th><th>Atk</th><th>Won</th><th>Lost</th><th>Tie</th></tr></thead>
+          <tbody id="battleStatsBody"><tr><td colspan="5" style="text-align:center;color:var(--muted)">No battles yet</td></tr></tbody>
+        </table>
       </div>
 
       <div class="card">
@@ -535,8 +780,177 @@ select {
   var C = window.StrategoReplayCore, N = C.N;
   var $ = function (id) { return document.getElementById(id); };
 
-  var replay = null, parsed = null, step = 0, viewMode = 'full', flipBoard = false;
+  var replay = null, parsed = null, step = 0, prevStep = -1, viewMode = 'full', flipBoard = false;
   var timer = null, pinnedSq = null, hoveredSq = null, activeBelief = null, activeBeliefLabel = '';
+  var cumStats = null;
+  var motionOk = function () { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: no-preference)').matches; };
+
+  function precomputeStats() {
+    var n = replay.plies.length;
+    var trackSide = (replay.meta && replay.meta.net_side) ? replay.meta.net_side : 1;
+    // Per step (0..n): cumulative belief hits/total, battles count, and tracked-side attack table [rev, mov, unmov] x [w, l, t]
+    var belHits = new Array(n + 1), belTot = new Array(n + 1), batCount = new Array(n + 1), atkSnap = new Array(n + 1);
+    var bh = 0, bt = 0, bc = 0;
+    var atk = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]; // 0=revealed, 1=hidden moved, 2=hidden unmoved
+    belHits[0] = 0; belTot[0] = 0; batCount[0] = 0;
+    atkSnap[0] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (var i = 0; i < n; i++) {
+      var p = replay.plies[i];
+      var stBefore = parsed.states[i];
+      if (p.belief) {
+        Object.keys(p.belief).forEach(function (k) {
+          var sq = Number(k), bv = stBefore.board[sq];
+          if (bv === C.EMPTY || bv === C.LAKE) return;
+          var isEnemy = (p.side === 1 && bv < 0) || (p.side === -1 && bv > 0);
+          var hid = p.side === 1 ? !stBefore.revRed[sq] : !stBefore.revBlue[sq];
+          if (isEnemy && hid) {
+            bt++;
+            if (p.belief[k].top_rank === Math.abs(bv)) bh++;
+          }
+        });
+      }
+      if (p.battle) {
+        bc++;
+        if (trackSide === 0 || p.side === trackSide) {
+          var dst = C.normSq(p.move[1]);
+          var kind = p.battle.defender_was_revealed ? 0 : (stBefore.moved[dst] ? 1 : 2);
+          var col = p.battle.result === 1 ? 0 : (p.battle.result === -1 ? 1 : 2);
+          atk[kind][col]++;
+        }
+      }
+      belHits[i + 1] = bh; belTot[i + 1] = bt; batCount[i + 1] = bc;
+      atkSnap[i + 1] = [atk[0].slice(), atk[1].slice(), atk[2].slice()];
+    }
+    cumStats = { belHits: belHits, belTot: belTot, batCount: batCount, atkSnap: atkSnap, trackSide: trackSide };
+  }
+
+  function drawReplayArrow(srcSq, dstSq, isBlunder) {
+    var svg = $('moveArrowSvg');
+    if (!svg) return;
+    svg.innerHTML = '';
+    if (srcSq < 0 || dstSq < 0) return;
+    var visSrc = flipBoard ? (99 - srcSq) : srcSq;
+    var visDst = flipBoard ? (99 - dstSq) : dstSq;
+    var r1 = Math.floor(visSrc / N), c1 = visSrc % N;
+    var r2 = Math.floor(visDst / N), c2 = visDst % N;
+    var x1 = c1 * 100 + 50, y1 = r1 * 100 + 50;
+    var x2 = c2 * 100 + 50, y2 = r2 * 100 + 50;
+    var dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+    if (len < 1) return;
+    var ux = dx / len, uy = dy / len;
+    var sx = x1 + ux * 18, sy = y1 + uy * 18;
+    var ex = x2 - ux * 42, ey = y2 - uy * 42;
+    if (Math.hypot(ex - sx, ey - sy) < 8) { sx = x1; sy = y1; ex = x2 - ux * 36; ey = y2 - uy * 36; }
+    var col = isBlunder ? 'rgba(201,38,38,0.94)' : 'rgba(227,178,60,0.94)';
+    var ns = 'http://www.w3.org/2000/svg';
+    var defs = document.createElementNS(ns, 'defs');
+    var mk = document.createElementNS(ns, 'marker');
+    mk.setAttribute('id', 'repArrHead'); mk.setAttribute('markerWidth', '7'); mk.setAttribute('markerHeight', '7');
+    mk.setAttribute('refX', '5'); mk.setAttribute('refY', '3.5'); mk.setAttribute('orient', 'auto');
+    var poly = document.createElementNS(ns, 'polygon');
+    poly.setAttribute('points', '0 0, 7 3.5, 0 7'); poly.setAttribute('fill', col);
+    mk.appendChild(poly); defs.appendChild(mk); svg.appendChild(defs);
+    var line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', sx.toFixed(1)); line.setAttribute('y1', sy.toFixed(1));
+    line.setAttribute('x2', ex.toFixed(1)); line.setAttribute('y2', ey.toFixed(1));
+    line.setAttribute('stroke', col); line.setAttribute('stroke-width', '10');
+    line.setAttribute('stroke-linecap', 'round');
+    if (len > 150) line.setAttribute('stroke-dasharray', '14 10');
+    line.setAttribute('marker-end', 'url(#repArrHead)');
+    svg.appendChild(line);
+  }
+
+  function renderTelemetry() {
+    if (!replay || !parsed || !cumStats) return;
+    var st = parsed.states[step];
+    var nbLim = (replay.meta && replay.meta.no_battle_plies) || 200;
+
+    // 1. Value KPI (Red POV) + delta from prior evaluated ply
+    var curVal = null, prevVal = null;
+    for (var i = 0; i < parsed.values.length; i++) {
+      if (parsed.values[i].step <= step) { prevVal = curVal; curVal = parsed.values[i].redVal; }
+      else break;
+    }
+    var valEl = $('kpiVal'), valSub = $('kpiValSub');
+    if (curVal !== null) {
+      valEl.textContent = (curVal >= 0 ? '+' : '') + curVal.toFixed(2);
+      valEl.className = 'v' + (curVal > 0.08 ? ' pos' : (curVal < -0.08 ? ' neg' : ''));
+      var dv = prevVal !== null ? (curVal - prevVal) : null;
+      var winPct = Math.round(50 * (Math.max(-1, Math.min(1, curVal)) + 1));
+      valSub.textContent = (dv !== null ? ('ΔV ' + (dv >= 0 ? '+' : '') + dv.toFixed(2) + ' · ') : '') + winPct + '% win';
+    } else {
+      valEl.textContent = '–'; valEl.className = 'v'; valSub.textContent = 'no value data';
+    }
+
+    // 2. Policy Focus KPI (Top-1 % & entropy H)
+    var plyObj = step > 0 ? replay.plies[step - 1] : (replay.plies[0] || null);
+    if (plyObj && (!plyObj.top5 || !plyObj.top5.length) && step < replay.plies.length && replay.plies[step].top5) {
+      plyObj = replay.plies[step];
+    }
+    if (plyObj && plyObj.top5 && plyObj.top5.length) {
+      var top1 = plyObj.top5[0].prob;
+      var ent = 0, sumP = 0;
+      plyObj.top5.forEach(function (it) { if (it.prob > 1e-6) { ent -= it.prob * Math.log(it.prob); sumP += it.prob; } });
+      var rem = Math.max(0, 1 - sumP);
+      if (rem > 1e-4) ent -= rem * Math.log(rem);
+      $('kpiPol').textContent = (top1 * 100).toFixed(1) + '%';
+      $('kpiPolSub').textContent = 'Top-1 · H=' + ent.toFixed(2);
+    } else {
+      $('kpiPol').textContent = '–'; $('kpiPolSub').textContent = 'no logits';
+    }
+
+    // 3. Cumulative Belief Accuracy KPI
+    var bh = cumStats.belHits[step], bt = cumStats.belTot[step];
+    if (bt > 0) {
+      $('kpiBel').textContent = (100 * bh / bt).toFixed(1) + '%';
+      $('kpiBelSub').textContent = bh + '/' + bt + ' hidden hits';
+    } else {
+      $('kpiBel').textContent = '–'; $('kpiBelSub').textContent = 'no beliefs yet';
+    }
+
+    // 4. Draw Clock KPI
+    $('kpiClk').textContent = st.nb + ' / ' + nbLim;
+    $('kpiClkSub').textContent = 'Ply ' + step + '/' + replay.plies.length + ' · ' + cumStats.batCount[step] + ' battles';
+
+    // 5. Army & Material Balance
+    var totP = Math.max(st.redCount + st.blueCount, 1);
+    $('armyBarRed').style.width = (100 * st.redCount / totP).toFixed(1) + '%';
+    $('armyBarBlue').style.width = (100 * st.blueCount / totP).toFixed(1) + '%';
+    var diff = st.redCount - st.blueCount;
+    $('armySummary').textContent = 'Red ' + st.redCount + ' · Blue ' + st.blueCount + ' (' + (diff >= 0 ? '+' : '') + diff + ')';
+    var cntR = new Int32Array(13), cntB = new Int32Array(13);
+    for (var s = 0; s < 100; s++) {
+      var v = st.board[s];
+      if (v > 0 && v !== C.LAKE) cntR[v]++;
+      else if (v < 0 && v !== C.LAKE) cntB[-v]++;
+    }
+    var keys = [
+      ['M', C.P.MARSHAL], ['9', C.P.GENERAL], ['8', C.P.COLONEL],
+      ['Spy', C.P.SPY], ['Min', C.P.MINER], ['Bmb', C.P.BOMB]
+    ];
+    $('armyGrid').innerHTML = keys.map(function (kv) {
+      return '<div class="army-cell"><div class="r">' + kv[0] + '</div><div class="c"><span class="c-red">' +
+             cntR[kv[1]] + '</span>/<span class="c-blue">' + cntB[kv[1]] + '</span></div></div>';
+    }).join('');
+
+    // 6. Cumulative Battle Breakdown
+    var atk = cumStats.atkSnap[step];
+    var labels = ['Revealed', 'Hidden (moved)', 'Hidden (unmoved)'];
+    var totalAtk = 0;
+    var rowsHtml = '';
+    for (var k = 0; k < 3; k++) {
+      var w = atk[k][0], l = atk[k][1], t = atk[k][2], nAtk = w + l + t;
+      totalAtk += nAtk;
+      var wStr = nAtk ? Math.round(100 * w / nAtk) + '%' : '–';
+      var lStr = nAtk ? Math.round(100 * l / nAtk) + '%' : '–';
+      var tStr = nAtk ? Math.round(100 * t / nAtk) + '%' : '–';
+      rowsHtml += '<tr><td>' + labels[k] + '</td><td>' + nAtk + '</td><td style="color:var(--win);font-weight:700">' +
+                  wStr + '</td><td style="color:var(--lose)">' + lStr + '</td><td>' + tStr + '</td></tr>';
+    }
+    $('battleStatsBody').innerHTML = rowsHtml;
+    var whoLbl = cumStats.trackSide === 1 ? 'Red' : (cumStats.trackSide === -1 ? 'Blue' : 'Both');
+    $('battleStatsTag').textContent = whoLbl + ' · ' + totalAtk + ' atk';
+  }
 
   // Build 100 board squares
   var boardEl = $('board'), sqEls = [];
@@ -594,7 +1008,9 @@ select {
       return;
     }
     replay = data;
+    prevStep = -1;
     pinnedSq = null; hoveredSq = null;
+    precomputeStats();
     var n = replay.plies.length;
     var sc = $('scrubber');
     sc.disabled = false; sc.min = 0; sc.max = n; sc.value = 0;
@@ -623,9 +1039,11 @@ select {
 
   function setStep(k) {
     if (!replay) return;
+    prevStep = step;
     step = Math.max(0, Math.min(replay.plies.length, k));
     $('scrubber').value = step;
-    renderBoard();
+    renderBoard(step === prevStep + 1);
+    renderTelemetry();
     renderTop5();
     renderBeliefInspector(pinnedSq !== null ? pinnedSq : hoveredSq);
     updateValueCursor();
@@ -707,7 +1125,7 @@ select {
     });
   }
 
-  function renderBoard() {
+  function renderBoard(animateForward) {
     var st = parsed.states[step];
     var lastPly = step > 0 ? replay.plies[step - 1] : null;
     var lastSrc = lastPly ? C.normSq(lastPly.move[0]) : -1;
@@ -748,11 +1166,11 @@ select {
         var tb = lastPly.belief[String(lastDst)];
         html += ' <span style="color:var(--muted)">(Pre-attack belief: ' + C.NAMES[tb.top_rank] + ' ' + Math.round(tb.top_prob * 100) + '%)</span>';
       }
-      banner.innerHTML = html;
+      banner.innerHTML = '<span>' + html + '</span>';
       banner.className = 'battle-banner show' + (lastPly.sure_loss_non_scout ? ' blunder' : '');
     } else {
       banner.className = 'battle-banner';
-      banner.innerHTML = '';
+      banner.innerHTML = '<span>' + (step === 0 ? 'Initial setup — press Play or use ← / → to step through the game.' : 'Quiet move — no battle on this ply.') + '</span>';
     }
 
     // Belief accuracy summary in fully revealed mode
@@ -807,10 +1225,13 @@ select {
         if (st.moved[sq]) pCls += ' moved-dot';
         d.className = pCls;
         if (visible) {
-          d.innerHTML = C.LABELS[rank] + '<small>' + C.NAMES[rank].slice(0, 4) + '</small>';
+          d.innerHTML = '<span class="rk">' + C.LABELS[rank] + '</span><svg class="emblem" aria-hidden="true" focusable="false"><use href="#ph-rank-' + rank + '"></use></svg>';
+          d.title = (isRed ? 'Red ' : 'Blue ') + C.NAMES[rank] + ' (' + C.LABELS[rank] + ')';
         } else {
-          d.textContent = '?';
+          d.innerHTML = '<svg class="emblem" aria-hidden="true" focusable="false"><use href="#ph-hidden"></use></svg>';
+          d.title = (isRed ? 'Red ' : 'Blue ') + 'hidden piece';
         }
+        el.setAttribute('aria-label', C.sqName(sq) + ': ' + (visible ? ((isRed ? 'Red ' : 'Blue ') + C.NAMES[rank]) : ((isRed ? 'Red ' : 'Blue ') + 'hidden piece')));
         el.appendChild(d);
 
         // Belief overlay on hidden enemy squares matching activeBelief
@@ -826,11 +1247,45 @@ select {
             el.appendChild(tag);
           }
         }
+      } else {
+        el.setAttribute('aria-label', C.sqName(sq) + ': ' + (v === C.LAKE ? 'lake' : 'empty'));
       }
     }
 
     renderCaptured($('capBlue'), st.capBlue, 'blue');
     renderCaptured($('capRed'), st.capRed, 'red');
+    drawReplayArrow(lastSrc, lastDst, isBlunder);
+
+    // Smooth compositor piece glide & clash ring when advancing 1 ply forward
+    if (animateForward && lastPly && motionOk() && lastSrc >= 0 && lastDst >= 0) {
+      var visSrc = flipBoard ? (99 - lastSrc) : lastSrc;
+      var visDst = flipBoard ? (99 - lastDst) : lastDst;
+      var dstEl = sqEls[visDst];
+      var moverSurvived = !lastPly.battle || lastPly.battle.result === 1;
+      if (moverSurvived && dstEl) {
+        var pieceEl = dstEl.querySelector('.piece');
+        if (pieceEl) {
+          var a = sqEls[visSrc].getBoundingClientRect(), b = dstEl.getBoundingClientRect();
+          var dx = a.left - b.left, dy = a.top - b.top;
+          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+            var spd = Number($('speedSel').value) || 500;
+            var glideMs = Math.max(85, Math.min(220, Math.round(spd * 0.55)));
+            pieceEl.style.setProperty('--glide-ms', glideMs + 'ms');
+            pieceEl.style.translate = dx.toFixed(1) + 'px ' + dy.toFixed(1) + 'px';
+            pieceEl.getBoundingClientRect();
+            pieceEl.classList.add('glide');
+            pieceEl.style.translate = '0px 0px';
+            setTimeout(function () { pieceEl.classList.remove('glide'); }, glideMs + 40);
+          }
+        }
+      }
+      if (lastPly.battle && dstEl) {
+        var ring = document.createElement('div');
+        ring.className = 'clash-ring';
+        dstEl.appendChild(ring);
+        setTimeout(function () { if (ring.parentNode) ring.parentNode.removeChild(ring); }, 440);
+      }
+    }
   }
 
   function renderCaptured(el, list, cls) {
@@ -1080,7 +1535,13 @@ select {
     if (step > 0 && ul.children[step - 1]) {
       var cur = ul.children[step - 1];
       cur.classList.add('cur');
-      cur.scrollIntoView({ block: 'nearest' });
+      // Scroll ONLY inside the move-log container — never call scrollIntoView(), which scrolls window
+      var top = cur.offsetTop - ul.offsetTop;
+      if (top < ul.scrollTop) {
+        ul.scrollTop = top;
+      } else if (top + cur.offsetHeight > ul.scrollTop + ul.clientHeight) {
+        ul.scrollTop = top + cur.offsetHeight - ul.clientHeight;
+      }
     }
   }
 
@@ -1191,9 +1652,15 @@ select {
 
   var params = new URLSearchParams(location.search);
   var qFile = params.get('file') || params.get('game');
-  if (qFile) fetchReplayUrl(qFile);
+  var embeddedEl = document.getElementById('embedded-replay');
+  var hasEmbedded = Boolean(embeddedEl && embeddedEl.textContent && embeddedEl.textContent.trim());
+  if (qFile) {
+    fetchReplayUrl(qFile);
+  } else if (hasEmbedded) {
+    loadReplayText(embeddedEl.textContent, embeddedEl.getAttribute('data-name') || 'embedded-game.json');
+  }
 
-  if (location.protocol.indexOf('http') === 0) {
+  if (!hasEmbedded && location.protocol.indexOf('http') === 0) {
     var idxCandidates = ['../../runs/replays/index.json', '../runs/replays/index.json', 'replays/index.json'];
     (function tryNext(i) {
       if (i >= idxCandidates.length) return;

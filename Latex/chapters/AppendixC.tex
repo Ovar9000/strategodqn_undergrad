@@ -2378,10 +2378,185 @@ scripted opponents that costs nothing, but it is the kind of play a human notice
 around when the network's confidence is wrong.
 
 % ------------------------------------------------------------------------------------------
+\section{Phase B: play-time safety filter, strong exploiter, and network capacity (ppo\_5)}
+\label{sec:phase-b}
+
+\paragraph{Change.} Following the Phase A findings (Section~\ref{sec:phase-a}), four interventions
+were tested one at a time while leaving the 59-plane observation and the two-square game rules
+unchanged, together with a noise-aware update to the training health checker:
+\begin{enumerate}
+  \item \emph{Noise-aware evaluation health rule} (\texttt{vec/health.py}). The previous rule
+        flagged any drop exceeding 5 percentage points below a run's running maximum against a
+        scripted expert, which produced four false alarms from normal 300-game binomial variance
+        during \texttt{ppo\_4}. It was replaced by a pooled moving-average z-test that flags a drop
+        only when it exceeds $2.5 \times \mathrm{SE}$ below the pooled win rate of the prior up to
+        three evaluations in that series (with Jeffreys-smoothed proportions so $\mathrm{SE}$ never
+        collapses at 0\% or 100\%).
+  \item \emph{Play-time safety filter} (\texttt{vec/safety.py}, \texttt{vec/net.py},
+        \texttt{web/play.html}). Applied strictly at play time after the network (never imported in
+        \texttt{vec/ppo.py}), the mask forbids any non-Scout from attacking a revealed enemy piece
+        that beats it, and any non-Miner (including Scouts) from attacking a revealed Bomb, falling
+        back to the unmodified legal mask if no safe move exists. Equal-rank trades, Spy versus
+        revealed Marshal, and attacks on hidden pieces remain untouched; only public board state
+        (\texttt{opp} masked by \texttt{opp\_rev}) is read. Enabled by default with a user toggle in
+        \texttt{web/play.html} and verified for exact Python--JavaScript parity in
+        \texttt{test/test\_safety.py}.
+  \item \emph{Strong exploiter initialized from \texttt{ppo\_4}} (\texttt{vec/exploit.py}). To
+        remove the 630-Elo cold-start confound of Section~\ref{sec:phase-a}, a 45-minute PPO
+        exploiter (\texttt{runs/exploit/ppo\_4\_from\_self}) was initialized directly from
+        \texttt{ppo\_4}'s own weights (learning rate $1.5 \times 10^{-4} \to 2 \times 10^{-5}$,
+        zero value warm-up, seed 10) and trained exclusively against frozen \texttt{ppo\_4} with
+        the safety filter active, with no self-play, league, or magnet regularisation.
+  \item \emph{Paired capacity comparison: 6$\times$64 control (\texttt{ppo\_5}) versus distilled
+        10$\times$128 (\texttt{ppo\_5\_10x128})}. First, a ten-block, 128-channel
+        \texttt{PolicyValueNet} (3.52\,M parameters versus 0.93\,M for 6$\times$64) was distilled
+        from \texttt{ppo\_4} on streaming DAgger games (\texttt{vec/distill.py}, 48 minutes total
+        across two passes, 13.8\,M labelled positions) using legal-masked forward KL for policy,
+        MSE for value, and true-rank cross-entropy for belief. Then both architectures ran for an
+        identical three-hour budget on the same RTX 3060 GPU with identical \texttt{ppo\_4}
+        hyperparameters, PFSP league, magnet KL, and random seed (seed 5, \texttt{--eval-ref}
+        \texttt{ppo\_4}), differing only in network capacity.
+\end{enumerate}
+
+\paragraph{Why.} Section~\ref{sec:phase-a} ruled out move-history memory as the bottleneck
+($+0.4$ percentage points overall; unmoved-Bomb AUC unchanged at 0.743), traced \texttt{ppo\_4}'s
+sure-loss blunders to result-only indifference in won positions (4--6$\times$ rate at value
+$\ge 0.8$), and left two questions open: whether \texttt{ppo\_4} is genuinely hard to exploit when
+the exploiter starts at parity, and whether scaling network capacity pays off per wall-clock hour
+despite lower throughput on a single laptop GPU.
+
+\paragraph{Result.} \emph{Health checker and play-time safety filter.} Under the $2.5\,\mathrm{SE}$
+moving-average rule, \texttt{ppo\_3}, \texttt{ppo\_4}, and \texttt{ppo\_5} report zero flags
+(\texttt{OK}), while \texttt{ppo\_2}'s real iteration-300 regressions ($-9.3$ pp greedy and $-5.0$
+pp sampled, both $> 2.6\,\mathrm{SE}$) remain flagged. On 600-game \texttt{vec.diagnose} runs
+(seed 0), adding the safety filter to \texttt{ppo\_4} reduced non-Scout sure losses from 0.22 to
+0.00 per game against \texttt{expert} (sampled wins 574/23/3 $\to$ 581/17/2; revealed attacks lost
+30\% $\to$ 15\%) and from 0.16 to 0.00 against \texttt{expert3} (revealed attacks lost 15\% $\to$
+7\%). Across 2$\times$1\,000 balanced head-to-head games on fresh seeds 7 and 8,
+\texttt{ppo\_4+safe} scored 50.95\% and 52.95\% sampled (51.95\% combined, $z = +1.76$) and 49.80\%
+and 49.85\% greedy (49.83\% combined) against raw \texttt{ppo\_4}, eliminating obvious blunders at
+zero strength cost.
+
+\emph{Strong exploiter.} Starting from \texttt{ppo\_4} against frozen \texttt{ppo\_4+safe} (190
+iterations, 12.45\,M learner decisions, 45.1 minutes; frozen target weights verified bit-for-bit
+unchanged), the exploiter climbed from 48.6\% sampled / 49.1\% greedy at iteration 0 to 55.0\% /
+51.6\% at iteration 190, never approaching the 65\% threshold. On fresh seeds 7 and 8
+(2$\times$1\,000 balanced games), \texttt{net\_final} scored 53.70\% and 53.00\% sampled (53.35\%
+combined) and 54.25\% and 52.50\% greedy (53.38\% combined) against \texttt{ppo\_4+safe}
+(\texttt{net\_best}: 54.38\% sampled; versus raw \texttt{ppo\_4}: 54.30\% sampled, showing the
+filter trims roughly one point off exploitation). Diagnosing 600 games (seed 301) showed the small
+edge came from higher attack tempo (21.1 versus 19.3 attacks per game) and marginally fewer high-piece
+losses, at the cost of overfitting: against \texttt{expert3} the exploiter regressed from
+\texttt{ppo\_4}'s 520/70/10 (86.7\%) to 495/92/13 (82.5\%, 31\% more losses).
+
+\emph{Distillation and paired capacity runs.} After 13.8\,M distilled positions (policy KL 0.248,
+value MSE 0.0059, 77.0\% top-move agreement, 40.1\% belief accuracy), the 10$\times$128 student
+already beat \texttt{ppo\_4} greedily on seeds 7 and 8 (51.45\% and 53.75\%, 52.60\% combined)
+while trailing slightly when sampled (47.70\% and 46.35\%, 47.03\% combined) because forward KL is
+mode-covering and leaves slightly higher tail entropy. Over the paired three-hour PPO runs (both
+recording zero health flags), the larger network ran 2.65$\times$ slower in decisions per second
+(194 iterations, 19.0\,M decisions, 7.7 games/s versus \texttt{ppo\_5}'s 516 iterations, 50.3\,M
+decisions, 21.2 games/s), yet matched or outperformed the 6$\times$64 control across head-to-head
+matches (2$\times$1\,000 balanced games, seeds 7 and 8) and won the extended 14-player
+Bradley--Terry ladder (36\,400 total games, seeds 101 and 202, 1\,000 bootstraps, BT RMSE 3.99 pp):
+\begin{center}
+\small
+\begin{tabular}{lccccc}
+\toprule
+Model & params & 3\,h decisions & Ladder Elo [95\% CI] & vs \texttt{ppo\_4} (T=1 / T=0) & vs \texttt{ppo\_5} (+safe T=1 / T=0) \\
+\midrule
+\texttt{ppo\_4} (6$\times$64)       & 0.93\,M & --       & 2075.8 [2058.3, 2096.1] & --                & -- \\
+\texttt{ppo\_5} (6$\times$64)       & 0.93\,M & 50.3\,M  & 2115.9 [2098.4, 2135.1] & 58.6\% / 57.2\%   & -- \\
+\texttt{ppo\_5\_10x128} (10$\times$128) & 3.52\,M & 19.0\,M & 2140.3 [2122.2, 2160.8] & 58.7\% / 59.2\% & 52.2\% / 53.8\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+On the ladder, \texttt{ppo\_5\_10x128} outscored \texttt{ppo\_5} against nearly every historical
+opponent (\texttt{expert2} 89.4\% vs 86.9\%, \texttt{expert3} 88.2\% vs 85.0\%, \texttt{ppo\_1}
+91.0\% vs 87.1\%, \texttt{ppo\_2} 74.6\% vs 71.4\%, \texttt{ppo\_3} 69.0\% vs 66.9\%,
+\texttt{ppo\_4} 64.9\% vs 54.5\%, direct 50.9\%), yielding bootstrap $P(\texttt{ppo\_5\_10x128} >
+\texttt{ppo\_5}) = 99.8\%$ ($\Delta\text{Elo}$ 95\% CI $[+6.8, +41.8]$) and
+$P(\texttt{ppo\_5\_10x128} > \texttt{ppo\_4}) = 100.0\%$ ($[+46.9, +81.2]$). Direct raw
+head-to-head on seeds 7 and 8 was close (51.23\% sampled, 50.48\% greedy), widening to 52.15\%
+sampled and 53.78\% greedy (52.10\% and 55.45\%, $z = +3.45$) when both sides used the safety
+filter. Value explained variance climbed to 0.861 (versus 0.853 for \texttt{ppo\_5} and 0.839 for
+\texttt{ppo\_4}), and Marshal Bomb losses against \texttt{expert3} fell from 29\% in \texttt{ppo\_4}
+to 19--20\% in \texttt{ppo\_5\_10x128}. Evaluated greedily in the original thesis environment
+(\texttt{vec/eval\_original.py}, 400 games), \texttt{ppo\_5\_10x128} scored 398/0/2 (100/0/0 against
+random, heuristic, and smart heuristic; 98/0/2 against outlook expert; zero losses). Passing every
+replacement rule, it replaced \texttt{ppo\_4} in \texttt{web/model.onnx} (14.1\,MB; max policy
+difference $6.9 \times 10^{-5}$, value $4.8 \times 10^{-7}$, CPU ONNX batch-1 latency 1.9\,ms;
+\texttt{ppo\_4} backed up in \texttt{runs/ppo\_5\_10x128/web\_model\_prev/}). Caveats: single
+training seed (seed 5), and \texttt{ppo\_5\_10x128} required 48 minutes of distillation before its
+three-hour PPO run. Finally, a Phase B5 play-time belief-conditioned search design (1-ply exact
+12-rank branching and 2-ply policy-weighted lookahead with Magnetic Mirror Descent
+\cite{Ataraxos2025} KL regularisation) was documented with latency estimates in
+\texttt{runs/B5\_search\_design.md} without implementation yet.
+
+\paragraph{Reviewer re-check (2026-11-23).} The raw files behind every number above
+(\texttt{runs/b3\_vs\_b4/results.json}, \texttt{runs/ladder/ladder.json}, both training logs,
+\texttt{eval\_original\_greedy.json}) match what was reported. The head-to-heads were then
+re-run with the same code on two seeds the implementing agent had never used (41 and 42,
+2$\times$1\,000 balanced games each, a 20\,000-setup bank). They agreed on the
+direction and corrected the size. Against \texttt{ppo\_4}, \texttt{ppo\_5\_10x128} scored
+61.10\% sampled and 60.25\% greedy, and \texttt{ppo\_5} scored 57.63\% and 56.33\%. In the direct
+match, \texttt{ppo\_5\_10x128} against \texttt{ppo\_5} scored 49.48\% sampled ($z=-0.47$) and
+51.85\% greedy ($z=+1.70$) raw. With both sides filtered it scored 52.10\% ($z=+1.89$) and 52.60\%
+($z=+2.39$). Pooled over all four seeds (4\,000 games per cell), the direct result is 50.4\%
+sampled and 51.2\% greedy raw, and 52.1\% and 53.2\% with the filter. The larger network is
+therefore slightly stronger, by about one to three points or 10--20 Elo, and is not clearly
+better without the filter. The earlier $z=+3.45$ was the best of four comparisons
+(raw/filtered $\times$ sampled/greedy), and it shrank to $z=+2.39$ on new seeds. Four parts of the
+report overstated the result.
+(i) The ladder gap (+24.4 Elo, ``99.8\%'') leans on a single 400-game pair, 64.9\% against
+\texttt{ppo\_4}, which the 4\,000-game head-to-heads put at 59.9\%. Its Bradley--Terry fit
+error (RMSE 4.0 pp, maximum 12.8 pp) is larger than the gap itself, so the bootstrap probability
+understates the uncertainty.
+(ii) The ``four times more Elo per million PPO decisions'' ratio uses that inflated ladder
+gap, counts none of the 13.8\,M distillation positions, and ignores the 48 extra GPU minutes.
+Per GPU-hour the two networks gained about the same.
+(iii) The 600-game diagnostics pointed the other way against the scripted experts.
+\texttt{ppo\_5} went 546/44/10 against \texttt{expert3} and \texttt{ppo\_5\_10x128} went 525/64/11
+(589/10/1 versus 582/17/1 against \texttt{expert}). The report quoted the ladder numbers, which
+favour the larger network, and not these.
+(iv) The distilled student reached 47.0\% sampled against \texttt{ppo\_4}, below the brief's
+48\% gate, and PPO was started anyway. The report states this, but as a caveat, not as a
+deviation from the brief.
+The claim of zero health flags for \texttt{ppo\_5\_10x128} is true, but the cited
+\texttt{health.txt} does not contain it, because the run finder only matches \texttt{ppo\_<digits>}.
+Running the check on that log directly gives zero flags. The model swap still satisfies the
+replacement rule against \texttt{ppo\_4}, the model it replaced.
+
+\paragraph{Lesson.} Three complementary mechanisms push a model-free Stratego learner beyond a
+single-scale plateau: a tiny public-information play-time safety filter removes visible blunders
+that result-only RL leaves behind in won positions; a parity-started exploiter separates genuine
+robustness (only $+3.4$ pp exploitable, with out-of-distribution overfitting) from cold-start
+artefacts; and simply continuing PPO for three more hours (\texttt{ppo\_5}) was worth about 57\%
+against its parent. On this budget, more capacity (6$\times$64 $\to$ 10$\times$128 via
+distillation) added only a small further edge of one to three points, mostly visible with the
+safety filter. The first write-up said it delivered ``four times more Elo per million
+decisions''. That came from one noisy ladder pair and a ratio that left out the distillation
+cost, which shows that a capacity claim should rest on a pre-chosen head-to-head metric checked
+on held-out seeds, not on the best-looking derived figure.
+
+% ------------------------------------------------------------------------------------------
 \section{Engineering notes}
 \label{sec:engineering}
 
 \begin{itemize}
+  \item Running the 270-test suite on eight worker processes (pytest-xdist, one torch thread per
+        worker) cut it from 16 minutes 15 seconds to about 5.5 minutes. Seven files that drive the
+        frozen DQN trainer took about 80\% of the test time. They are now a separate
+        \texttt{legacy} tier, which leaves a 1.5-minute tier for day-to-day work on
+        \texttt{vec/}. The parallel run exposed one test that passed or failed depending on
+        which tests ran before it, because it used an unseeded random setup. Every test now
+        starts from the same random state. A run finder that matched only \texttt{ppo\_<digits>}
+        had silently left \texttt{ppo\_5\_10x128} out of the health report, and the report was
+        then cited for that run. The lesson is that a check missing an input should fail loudly,
+        and claims should cite the file that actually contains the evidence. Strength claims are
+        now checked with \texttt{vec/verify.py}. It plays on fresh random seeds, fixes the primary
+        comparison before any game is played, and shows the other comparisons with Holm-adjusted
+        $p$-values.
   \item formal\_6 and formal\_7 were both killed partway, with no Python error. formal\_7's error
         log showed \texttt{forrtl: error (200): program aborting due to window-CLOSE event} once
         for each process. The Intel Fortran runtime that numpy's maths library loads installs a

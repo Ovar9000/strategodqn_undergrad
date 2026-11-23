@@ -70,9 +70,11 @@ def parse(path):
 
 
 def load_runs(root):
-    names = sorted((n for n in os.listdir(root) if re.fullmatch(r'ppo_\d+', n)
+    # ppo_<N> and named variants such as ppo_5_10x128 (a run the old ppo_\d+ pattern silently left
+    # out of health.txt). A variant sorts right after its base run, so a parent is placed first.
+    names = sorted((n for n in os.listdir(root) if re.fullmatch(r'ppo_\d+(?:_[A-Za-z0-9]+)*', n)
                     and os.path.exists(os.path.join(root, n, 'log.txt'))),
-                   key=lambda n: int(n.split('_')[1]))
+                   key=lambda n: (int(n.split('_')[1]), len(n), n))
     runs = {n: parse(os.path.join(root, n, 'log.txt')) for n in names}
     # x offset of each run on the chained axis
     end = {}

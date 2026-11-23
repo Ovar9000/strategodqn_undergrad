@@ -18,8 +18,9 @@ Checks implemented (all thresholds configurable via DEFAULT_THRESHOLDS):
   4. ev_drop          : Value-head explained variance falls below 0.5 (ev < 0.5).
   5. eval_regression  : Evaluation win % vs any scripted expert (name starting
                         with 'expert', tracked per (mode, opponent) series within
-                        each run) drops > 5.0 percentage points below that run's
-                        running best for that series.
+                        each run) drops more than 2.5 x SE of the difference below
+                        the pooled moving average of the prior up to 3 evaluations
+                        in that series.
   6. nobattle_surge   : Share of finished training games ending in no-battle draws
                         (100 * nobattle / sum(ends), requiring >= 20 finished games)
                         reaches >= 5.0% OR (>= 3.0% AND > 2.5x the running mean of
@@ -42,7 +43,8 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
     'kl_min_history': 3,
     'kl_floor': 1e-4,
     'ev_min': 0.5,
-    'eval_drop_pp': 5.0,
+    'eval_z': 2.5,
+    'eval_window': 3,
     'nobattle_abs_pct': 5.0,
     'nobattle_rel_min_pct': 3.0,
     'nobattle_rel_mult': 2.5,
@@ -269,8 +271,10 @@ def check_run(name: str, run: dict, thresholds: Optional[Dict[str, float]] = Non
                         ))
                     nb_history.append(nb_pct)
 
-    # 5. Eval regression (> 5 pp below the run's best vs any expert) + eval NaN/inf check
-    best_by_series: Dict[Tuple[str, str], Tuple[float, int]] = {}
+    # 5. Eval regression (drop > eval_z * SE below pooled moving average of prior evals) + NaN/inf
+    eval_window = max(int(cfg['eval_window']), 1)
+    eval_z = float(cfg['eval_z'])
+    hist_by_series: Dict[Tuple[str, str], List[Tuple[float, float, int]]] = {}
     for e in eval_rows:
         it = int(e.get('it', 0))
         x = _x_of_it(run, it)
@@ -293,14 +297,23 @@ def check_run(name: str, run: dict, thresholds: Optional[Dict[str, float]] = Non
         if not opp.startswith('expert'):
             continue
 
-        pct = 100.0 * float(w) / float(g)
+        wf, gf = float(w), float(g)
+        p_cur = wf / gf
+        pct = 100.0 * p_cur
         key = (mode, opp)
-        if key not in best_by_series:
-            best_by_series[key] = (pct, it)
-        else:
-            best_pct, best_it = best_by_series[key]
-            drop = best_pct - pct
-            if drop > cfg['eval_drop_pp'] + 1e-9:
+        series = hist_by_series.setdefault(key, [])
+        if series:
+            win = series[-eval_window:]
+            ref_w = sum(item[0] for item in win)
+            ref_g = sum(item[1] for item in win)
+            p_ref = ref_w / ref_g
+            # Jeffreys-smoothed proportions avoid SE=0 at 0% or 100%
+            p_ref_s = (ref_w + 0.5) / (ref_g + 1.0)
+            p_cur_s = (wf + 0.5) / (gf + 1.0)
+            se = math.sqrt(p_ref_s * (1.0 - p_ref_s) / ref_g + p_cur_s * (1.0 - p_cur_s) / gf)
+            drop = p_ref - p_cur
+            if se > 0.0 and drop > eval_z * se + 1e-12:
+                z_score = drop / se
                 flags.append(Flag(
                     run=name,
                     kind='eval_regression',
@@ -309,11 +322,10 @@ def check_run(name: str, run: dict, thresholds: Optional[Dict[str, float]] = Non
                     metric=f'eval:{mode}:{opp}',
                     value=pct,
                     panel='eval_expert',
-                    detail=(f'{mode} vs {opp}: {pct:.1f}% (-{drop:.1f} pp from '
-                            f'best {best_pct:.1f}% at it {best_it})'),
+                    detail=(f'{mode} vs {opp}: {pct:.1f}% (-{100.0 * drop:.1f} pp vs '
+                            f'MA({len(win)}) {100.0 * p_ref:.1f}%, {z_score:.2f} SE > {eval_z:.1f})'),
                 ))
-            if pct > best_pct:
-                best_by_series[key] = (pct, it)
+        series.append((wf, gf, it))
 
     return flags
 
@@ -343,8 +355,8 @@ def format_report(
     )
     lines.append(f"  - ev_drop          : ev < {cfg['ev_min']:.2f}")
     lines.append(
-        f"  - eval_regression  : win % vs any expert drops > {cfg['eval_drop_pp']:.1f} pp "
-        "below the run's running best (per mode & expert)"
+        f"  - eval_regression  : win % vs any expert drops > {cfg['eval_z']:.1f} x SE "
+        f"below pooled moving average of prior <= {int(cfg['eval_window'])} evals (per mode & expert)"
     )
     lines.append(
         f"  - nobattle_surge   : no-battle draw share >= {cfg['nobattle_abs_pct']:.1f}% OR "

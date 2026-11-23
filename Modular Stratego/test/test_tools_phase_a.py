@@ -146,13 +146,29 @@ def test_health_on_real_ppo_runs_and_ppo_isolation():
         assert 'nan_inf' not in kinds
         assert 'entropy_collapse' not in kinds
         assert 'kl_spike' not in kinds
-    # Known real signals caught on ppo_1..4
+    # Known real signals caught on ppo_1..4 (noise-aware SE threshold suppresses ppo_4 false alarms)
     assert 'ev_drop' in {f.kind for f in flags['ppo_1']}
     assert 'nobattle_surge' in {f.kind for f in flags['ppo_1']}
-    assert 'eval_regression' in {f.kind for f in flags['ppo_1']}
     assert 'eval_regression' in {f.kind for f in flags['ppo_2']}
     assert flags['ppo_3'] == []
-    assert 'eval_regression' in {f.kind for f in flags['ppo_4']}
+    assert flags['ppo_4'] == []
+
+
+def test_health_eval_regression_is_noise_aware(tmp_path):
+    """Normal 300-game binomial dips below a moving average must not fire; >2.5 SE drops must."""
+    lines = [
+        _ppo_line(10, '1.00'), _ppo_line(20, '2.00'), _ppo_line(30, '3.00'), _ppo_line(40, '4.00'),
+        _eval_line(10, 'sample', 'expert2', 250, 45, 5, g=300),  # 83.3%
+        _eval_line(20, 'sample', 'expert2', 262, 33, 5, g=300),  # 87.3%
+        # Dip to 79.7% (-5.7 pp vs MA 85.3%, SE ~ 2.7 pp -> 2.1 SE < 2.5): noise, no flag
+        _eval_line(30, 'sample', 'expert2', 239, 55, 6, g=300),
+        # Real drop to 72.0% (-11.4 pp vs MA 83.4%, > 4 SE): must flag
+        _eval_line(40, 'sample', 'expert2', 216, 78, 6, g=300),
+    ]
+    _write_log(tmp_path, 'ppo_1', lines)
+    runs = plot_runs.load_runs(str(tmp_path))
+    flags = [f for f in health.check_runs(runs)['ppo_1'] if f.kind == 'eval_regression']
+    assert [f.it for f in flags] == [40]
 
 
 # ---------------------------------------------------------------------------
@@ -455,3 +471,13 @@ console.log('ok');
     assert exported['meta']['model'] == 'ppo_4.onnx'
     bot_plies = [p for p in exported['plies'] if p['side'] == -1]
     assert bot_plies and all(p['top5'] is not None and p['value'] is not None for p in bot_plies)
+
+
+def test_load_runs_finds_named_variants_after_their_base_run(tmp_path):
+    # ppo_5_10x128 was silently missing from health.txt while the pattern was ppo_\d+
+    line = _ppo_line(1, '0.10', kl=0.0000, ev=0.75, ends=(300, 10, 0, 0))
+    for name in ('ppo_10', 'ppo_5_10x128', 'ppo_5', 'distill_10x128', 'ppo_x'):
+        _write_log(tmp_path, name, [line])
+    runs = plot_runs.load_runs(str(tmp_path))
+    assert list(runs) == ['ppo_5', 'ppo_5_10x128', 'ppo_10']
+    assert health.check_runs(runs)['ppo_5_10x128'] == []

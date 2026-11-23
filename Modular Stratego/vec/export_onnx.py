@@ -8,6 +8,7 @@ same planes). Output "policy" (B, 3600): move logits in the action encoding; the
 illegal moves and turns the rest into probabilities. A second output "value" (B,) is the mover's
 expected result in [-1, 1].
 """
+import hashlib
 import json
 import os
 import sys
@@ -15,6 +16,17 @@ import sys
 import torch
 
 from vec.net import load
+
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Modular Stratego/
+
+
+def sha256_of(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(1 << 20), b''):
+            h.update(block)
+    return h.hexdigest()
 
 
 class Exported(torch.nn.Module):
@@ -36,7 +48,10 @@ def export(path: str, out: str) -> str:
                           dynamic_axes={'obs': {0: 'batch'}, 'policy': {0: 'batch'}, 'value': {0: 'batch'}})
     meta = {'input_planes': planes, 'actions': 3600, 'kind': 'policy-value', 'network': net.config,
             'encoding': 'canonical-frame obs (41 thesis planes + 18 public-information planes) / '
-                        'index = sq*36 + dir*9 + dist-1', 'source': os.path.basename(path)}
+                        'index = sq*36 + dir*9 + dist-1', 'source': os.path.basename(path),
+            # which checkpoint this is, exactly: test_web_engine re-runs it against the ONNX file
+            'source_path': os.path.relpath(os.path.abspath(path), PROJECT_ROOT).replace(os.sep, '/'),
+            'source_sha256': sha256_of(path)}
     with open(os.path.splitext(out)[0] + '.json', 'w') as f:
         json.dump(meta, f, indent=2)
     return out

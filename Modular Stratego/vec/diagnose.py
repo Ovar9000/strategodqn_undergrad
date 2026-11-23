@@ -90,14 +90,14 @@ def report(d) -> str:
     return '\n'.join(lines)
 
 
-def make_policy(spec: str, device, temperature: float):
+def make_policy(spec: str, device, temperature: float, safe: bool = False):
     if spec == 'expert':
         return VecExpert()
     if spec == 'random':
         return VecRandom()
     if spec.endswith('.json'):
         return VecExpert(style=Style(**json.load(open(spec))['champion']))
-    return NetPolicy(load(spec, device), temperature)
+    return NetPolicy(load(spec, device), temperature, safe=safe)
 
 
 def main():
@@ -106,14 +106,19 @@ def main():
     ap.add_argument('--opponent', default='expert')
     ap.add_argument('--games', type=int, default=1000)
     ap.add_argument('--temperature', type=float, default=1.0)
+    ap.add_argument('--safe', action='store_true', help='apply play-time safety filter to --net')
+    ap.add_argument('--opp-safe', action='store_true', help='apply play-time safety filter to --opponent')
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
     dev = torch.device('cuda')
     torch.manual_seed(args.seed)
     bank = diverse_setup_bank(8000, seed=args.seed + 1).to(dev)
-    d = diagnose(make_policy(args.net, dev, args.temperature), make_policy(args.opponent, dev, args.temperature),
+    d = diagnose(make_policy(args.net, dev, args.temperature, safe=args.safe),
+                 make_policy(args.opponent, dev, args.temperature, safe=args.opp_safe),
                  args.games, bank, dev)
-    print(f"{args.net} (temperature {args.temperature}) vs {args.opponent}:")
+    tag = ' +safe' if args.safe else ''
+    otag = ' +safe' if args.opp_safe else ''
+    print(f"{args.net}{tag} (temperature {args.temperature}) vs {args.opponent}{otag}:")
     print(report(d))
 
 

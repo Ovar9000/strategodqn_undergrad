@@ -7,119 +7,267 @@
 <meta name="description" content="Play Stratego against a MARQ Rainbow DQN agent exported to ONNX, in the browser.">
 <style>
 :root {
-  --bg: #f6f4ef;
-  --surface: #ffffff;
-  --surface-2: #efece4;
-  --text: #1f2328;
-  --muted: #5f6670;
-  --border: #d9d4c7;
-  --accent: #2f6fb3;
-  --board-light: #d9c79a;
-  --board-dark: #cdb984;
-  --lake: #6e9fc6;
-  --lake-edge: #5b8db5;
-  --me: #b8322a;
-  --me-text: #ffffff;
-  --bot: #2b5c96;
-  --bot-text: #ffffff;
-  --select: #f2c94c;
-  --target: rgba(47, 111, 179, 0.35);
-  --last: rgba(242, 201, 76, 0.55);
-  --win: #2e7d32;
-  --lose: #b8322a;
-  --shadow: 0 1px 2px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+  color-scheme: light dark;
+  --bg: #f1e8d6;
+  --surface: #faf4e6;
+  --surface-2: #ede1c9;
+  --text: #241911;
+  --muted: #645341;
+  --border: #c9b595;
+  --accent: #9c2720;
+  --wood-frame: #4a2a19;
+  --wood-grout: #361e12;
+  --board-light: #ddc596;
+  --board-dark: #c5a56c;
+  --lake: #245e78;
+  --lake-edge: #e2c58d;
+  --me: #9c2720;
+  --me-deep: #741a15;
+  --me-text: #fbf2dc;
+  --bot: #1e466e;
+  --bot-deep: #14304d;
+  --bot-text: #fbf2dc;
+  --select: #e3b23c;
+  --target: rgba(36, 94, 120, 0.36);
+  --last: rgba(227, 178, 60, 0.46);
+  --win: #2b6e35;
+  --lose: #9c2720;
+  --shadow: 0 2px 3px rgba(38,20,10,.18), 0 4px 10px rgba(38,20,10,.08);
+  --tex-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%235a3d20' stroke-opacity='.07' stroke-linecap='round'%3E%3Cpath d='M6 19q16-5 31 2M54 9q20 6 39-3M82 36q18 4 32-5M11 64q24-6 43 4M67 74q19-7 41 2M18 103q26 5 49-4M79 111q18-4 34 3' stroke-width='1.1'/%3E%3Cpath d='M25 32l7 2M92 58l-8 3M44 88l9-2M103 22l5 4M15 47l6-3M62 48l-7 2' stroke-width='.9'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-banig-a: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Cg fill='none' stroke='%236c4c26' stroke-linecap='round'%3E%3Cpath d='M0 6.5q9-1.2 18 .6t18-.4M0 18.4q10 1 18-.5t18 .6M0 30.2q8-.9 18 .7t18-.8' stroke-opacity='.17' stroke-width='1.1'/%3E%3Cpath d='M6.3 0q1.1 9-.5 18t.7 18M18.2 0q-.9 10 .6 18t-.8 18M30.4 0q.8 9-.6 18t.7 18' stroke-opacity='.15' stroke-width='1.1'/%3E%3Cpath d='M1 1h15v15H1zM19 19h15v15H19z' fill='%23fff6de' fill-opacity='.13' stroke='none'/%3E%3Cpath d='M3 13l9-1M21 31l10-1.2M13 4l-1 8M31 21l-1 9' stroke-opacity='.12' stroke-width='.9'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-banig-b: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Cg fill='none' stroke='%234f3417' stroke-linecap='round'%3E%3Cpath d='M0 5.8q10 1.2 18-.6t18 .7M0 17.6q9-1 18 .6t18-.7M0 29.8q11 .9 18-.6t18 .5' stroke-opacity='.21' stroke-width='1.15'/%3E%3Cpath d='M5.8 0q-1 9 .6 18t-.7 18M17.7 0q1 9-.5 18t.8 18M29.6 0q-.9 10 .6 18t-.7 18' stroke-opacity='.19' stroke-width='1.15'/%3E%3Cpath d='M18 1h16v16H18zM1 18h16v16H1z' fill='%233d240d' fill-opacity='.09' stroke='none'/%3E%3Cpath d='M3 3l11 11M20 20l12 12M15 21l-10 10M32 4l-10 10' stroke-opacity='.09' stroke-width='.9'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-lake: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44' viewBox='0 0 44 44'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M2 11c5-4 10-4 15 0s10 4 15 0 7-3 10-1' stroke='%23d8f0f8' stroke-opacity='.34' stroke-width='1.6'/%3E%3Cpath d='M-2 23c6-4 11-4 16 0s9 4 15 0 10-3 15 1' stroke='%230c2a3a' stroke-opacity='.32' stroke-width='1.5'/%3E%3Cpath d='M4 35c5-4 10-3 14 0s10 3 15-1 6-2 9 0' stroke='%23d8f0f8' stroke-opacity='.28' stroke-width='1.4'/%3E%3Cpath d='M14 8c2-2 4-1 3 1M32 29c2-2 5-1 3 2M7 29c2-1 4 0 3 2' stroke='%23e8f7fc' stroke-opacity='.32' stroke-width='1.1'/%3E%3C/g%3E%3C/svg%3E");
+  --tex-wood: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M0 7q15-2 28 1t20-1M0 19q12 2 25-1t23 1M0 32q17-2 30 1t18-1M0 43q14 2 29-1t19 1' stroke='%23fff0cf' stroke-opacity='.11' stroke-width='1.1'/%3E%3Cpath d='M0 12q14 2 27-1t21 1M0 26q16-2 29 1t19-2M0 38q13 1 26-1t22 2' stroke='%23160804' stroke-opacity='.18' stroke-width='1.2'/%3E%3C/g%3E%3C/svg%3E");
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #15171a;
-    --surface: #1e2125;
-    --surface-2: #262a2f;
-    --text: #e8e6e1;
-    --muted: #a0a6ad;
-    --border: #353a40;
-    --accent: #6ea8e6;
-    --board-light: #8c7a52;
-    --board-dark: #81704a;
-    --lake: #3b6488;
-    --lake-edge: #33597a;
-    --me: #c9473e;
-    --bot: #3d74b3;
-    --select: #e0b83f;
-    --target: rgba(110, 168, 230, 0.4);
-    --last: rgba(224, 184, 63, 0.45);
-    --win: #66bb6a;
-    --lose: #ef6b62;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+    --bg: #171310;
+    --surface: #221c17;
+    --surface-2: #2d251e;
+    --text: #efe5d2;
+    --muted: #b5a68e;
+    --border: #4a3c2e;
+    --accent: #d45b4a;
+    --wood-frame: #3a2114;
+    --wood-grout: #21120a;
+    --board-light: #826b45;
+    --board-dark: #6c5636;
+    --lake: #1b4b61;
+    --lake-edge: #9f8659;
+    --me: #ad3229;
+    --me-deep: #7f1e18;
+    --bot: #275887;
+    --bot-deep: #183a5c;
+    --select: #e6b843;
+    --target: rgba(110, 178, 212, 0.42);
+    --last: rgba(230, 184, 67, 0.42);
+    --win: #6cc474;
+    --lose: #ef6e63;
+    --shadow: 0 2px 4px rgba(0,0,0,.45), 0 4px 12px rgba(0,0,0,.32);
+    --tex-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%23ebd2a5' stroke-opacity='.045' stroke-linecap='round'%3E%3Cpath d='M6 19q16-5 31 2M54 9q20 6 39-3M82 36q18 4 32-5M11 64q24-6 43 4M67 74q19-7 41 2M18 103q26 5 49-4M79 111q18-4 34 3' stroke-width='1.1'/%3E%3C/g%3E%3C/svg%3E");
   }
 }
 :root[data-theme="dark"] {
-  --bg: #15171a;
-  --surface: #1e2125;
-  --surface-2: #262a2f;
-  --text: #e8e6e1;
-  --muted: #a0a6ad;
-  --border: #353a40;
-  --accent: #6ea8e6;
-  --board-light: #8c7a52;
-  --board-dark: #81704a;
-  --lake: #3b6488;
-  --lake-edge: #33597a;
-  --me: #c9473e;
-  --bot: #3d74b3;
-  --select: #e0b83f;
-  --target: rgba(110, 168, 230, 0.4);
-  --last: rgba(224, 184, 63, 0.45);
-  --win: #66bb6a;
-  --lose: #ef6b62;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+  color-scheme: dark;
+  --bg: #171310;
+  --surface: #221c17;
+  --surface-2: #2d251e;
+  --text: #efe5d2;
+  --muted: #b5a68e;
+  --border: #4a3c2e;
+  --accent: #d45b4a;
+  --wood-frame: #3a2114;
+  --wood-grout: #21120a;
+  --board-light: #826b45;
+  --board-dark: #6c5636;
+  --lake: #1b4b61;
+  --lake-edge: #9f8659;
+  --me: #ad3229;
+  --me-deep: #7f1e18;
+  --bot: #275887;
+  --bot-deep: #183a5c;
+  --select: #e6b843;
+  --target: rgba(110, 178, 212, 0.42);
+  --last: rgba(230, 184, 67, 0.42);
+  --win: #6cc474;
+  --lose: #ef6e63;
+  --shadow: 0 2px 4px rgba(0,0,0,.45), 0 4px 12px rgba(0,0,0,.32);
+  --tex-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%23ebd2a5' stroke-opacity='.045' stroke-linecap='round'%3E%3Cpath d='M6 19q16-5 31 2M54 9q20 6 39-3M82 36q18 4 32-5M11 64q24-6 43 4M67 74q19-7 41 2M18 103q26 5 49-4M79 111q18-4 34 3' stroke-width='1.1'/%3E%3C/g%3E%3C/svg%3E");
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: var(--tex-paper);
   color: var(--text);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 .wrap { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
 header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 14px; }
-h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: .3px; }
 .sub { color: var(--muted); font-size: 14px; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
 @media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 
 .board-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; box-shadow: var(--shadow); }
-.status { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; min-height: 28px; }
+.status { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; min-height: 28px; }
 .status .msg { font-weight: 600; }
 .status .msg.win { color: var(--win); }
 .status .msg.lose { color: var(--lose); }
 .status .counters { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+.event-strip {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 36px; padding: 6px 10px; margin-bottom: 10px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border); font-size: 13px; color: var(--muted);
+}
+.event-strip.clash { background: rgba(196, 122, 0, 0.13); border-color: rgba(196, 122, 0, 0.5); color: var(--text); }
+.event-strip.win { background: rgba(43, 110, 53, 0.13); border-color: rgba(43, 110, 53, 0.45); color: var(--text); }
+.event-strip.lose { background: rgba(156, 39, 32, 0.13); border-color: rgba(156, 39, 32, 0.45); color: var(--text); }
+.ev-tag {
+  display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  color: #fbf2dc; background: var(--bot); margin-right: 6px; letter-spacing: .3px; text-transform: uppercase;
+}
+.ev-tag.clash { background: #b86f09; }
+.ev-tag.win { background: var(--win); }
+.ev-tag.lose { background: var(--lose); }
+
+.board-shell { position: relative; width: 100%; max-width: 620px; margin: 0 auto; }
 .board {
-  display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px;
-  width: 100%; max-width: 620px; aspect-ratio: 1; margin: 0 auto;
-  background: var(--border); border: 2px solid var(--border); border-radius: 6px; overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-rows: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%; aspect-ratio: 1;
+  background-color: var(--wood-grout);
+  background-image: var(--tex-wood);
+  border: 6px solid var(--wood-frame);
+  border-radius: 9px 7px 10px 8px / 8px 10px 7px 9px;
+  box-shadow: inset 0 0 0 1px rgba(245, 222, 179, 0.22), 0 6px 18px rgba(34, 18, 9, 0.26);
+  overflow: clip;
   user-select: none; touch-action: manipulation;
 }
-.sq { position: relative; border: 0; padding: 0; margin: 0; background: var(--board-light); cursor: default;
-      display: flex; align-items: center; justify-content: center; font: inherit; color: inherit; }
-.sq.alt { background: var(--board-dark); }
-.sq.lake { background: var(--lake); box-shadow: inset 0 0 0 1px var(--lake-edge); }
-.sq.last::after { content: ""; position: absolute; inset: 0; background: var(--last); pointer-events: none; }
+.move-arrow-svg {
+  position: absolute; inset: 6px; width: calc(100% - 12px); height: calc(100% - 12px);
+  pointer-events: none; z-index: 3; display: block;
+}
+.sq {
+  position: relative; min-width: 0; min-height: 0; overflow: clip;
+  border: 0; padding: 0; margin: 0;
+  background-color: var(--board-light);
+  background-image: var(--tex-banig-a);
+  background-size: 36px 36px;
+  box-shadow: inset 0 0 0 1px rgba(68, 42, 18, 0.14);
+  cursor: default;
+  display: flex; align-items: center; justify-content: center; font: inherit; color: inherit;
+}
+.sq.alt {
+  background-color: var(--board-dark);
+  background-image: var(--tex-banig-b);
+}
+.sq.lake {
+  background-color: var(--lake);
+  background-image: var(--tex-lake);
+  background-size: 44px 44px;
+  box-shadow: inset 0 0 0 2px rgba(226, 197, 141, 0.42), inset 0 0 10px rgba(8, 28, 40, 0.45);
+}
+.sq.last::after { content: ""; position: absolute; inset: 0; background: var(--last); pointer-events: none; z-index: 0; }
 .sq.target { cursor: pointer; }
-.sq.target::before { content: ""; position: absolute; inset: 0; background: var(--target); pointer-events: none; z-index: 2; }
+.sq.target.quiet-target::before {
+  content: ""; position: absolute; width: 30%; height: 30%; border-radius: 48% 54% 46% 52%;
+  background: rgba(43, 110, 53, 0.72); box-shadow: 0 0 0 3px rgba(43, 110, 53, 0.24);
+  pointer-events: none; z-index: 2;
+}
+.sq.target.atk-target::before {
+  content: ""; position: absolute; inset: 3px; border-radius: 6px 4px 7px 5px;
+  border: 2.5px solid rgba(156, 39, 32, 0.92); background: rgba(156, 39, 32, 0.18);
+  pointer-events: none; z-index: 3;
+}
 .sq.selectable { cursor: pointer; }
 .piece {
-  position: relative; z-index: 1; width: 84%; height: 84%; border-radius: 6px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-weight: 700; font-size: clamp(11px, 2.6vw, 20px); line-height: 1; box-shadow: var(--shadow);
+  position: relative; z-index: 2; width: 86%; height: 86%;
+  border-radius: 5px 7px 6px 4px / 6px 4px 7px 5px;
+  border: 1.5px solid rgba(25, 11, 5, 0.48);
+  display: flex; align-items: center; justify-content: center;
+  background-image: var(--tex-wood);
+  background-size: 48px 48px;
+  box-shadow: inset 0 1.5px 0 rgba(255, 240, 205, 0.26), inset 0 -2px 0 rgba(18, 7, 3, 0.42), 0 2px 4px rgba(22, 10, 4, 0.34);
+  translate: 0 0; rotate: 0deg; scale: 1;
 }
-.piece small { font-size: clamp(7px, 1.3vw, 10px); font-weight: 600; opacity: .85; margin-top: 2px; letter-spacing: .2px; }
-.piece.me { background: var(--me); color: var(--me-text); }
-.piece.bot { background: var(--bot); color: var(--bot-text); }
-.piece.hidden { background: repeating-linear-gradient(45deg, var(--bot), var(--bot) 6px, color-mix(in srgb, var(--bot) 82%, #000) 6px, color-mix(in srgb, var(--bot) 82%, #000) 12px); }
-.piece.known-to-bot { outline: 2px dashed color-mix(in srgb, var(--me-text) 70%, transparent); outline-offset: -4px; }
-.piece.peek { opacity: .55; }
-.sq.selected .piece { outline: 3px solid var(--select); outline-offset: 1px; }
+.piece .rk, .defeated-ghost .rk {
+  position: absolute; top: 2px; left: 3px;
+  font-weight: 800; font-size: clamp(9px, 1.55vw, 12.5px); line-height: 1;
+  letter-spacing: -0.2px; text-shadow: 0 1px 1px rgba(15, 6, 3, 0.65);
+  pointer-events: none;
+}
+.piece .emblem, .defeated-ghost .emblem {
+  width: 68%; height: 68%; margin-top: 6%; margin-left: 6%;
+  display: block; flex-shrink: 0; pointer-events: none;
+  filter: drop-shadow(0 1px 0 rgba(18, 7, 3, 0.55));
+}
+.piece.hidden .emblem {
+  width: 74%; height: 74%; margin: 0; opacity: .88;
+}
+.piece.me { background-color: var(--me); color: var(--me-text); }
+.piece.bot { background-color: var(--bot); color: var(--bot-text); }
+.piece.hidden {
+  background-color: var(--bot-deep);
+  background-image: var(--tex-wood);
+  color: #e6d5b2;
+}
+.piece.known-to-bot { outline: 2px dashed rgba(251, 242, 220, 0.82); outline-offset: -4px; }
+.piece.peek { opacity: .62; }
+.sq.selected .piece { outline: 3px solid var(--select); outline-offset: 1px; scale: 1.08; box-shadow: 0 6px 14px rgba(22,10,4,.36); }
+
+.clash-ring {
+  position: absolute; inset: 6%; border-radius: 50%;
+  border: 3px solid rgba(227, 178, 60, 0.94);
+  pointer-events: none; z-index: 4; opacity: 0; scale: 1;
+}
+.defeated-ghost {
+  position: absolute; inset: 7%; border-radius: 5px 7px 6px 4px; pointer-events: none; z-index: 3;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: clamp(11px, 2.3vw, 18px); line-height: 1;
+  opacity: 0; scale: 1;
+}
+.defeated-ghost.me { background: var(--me); color: var(--me-text); }
+.defeated-ghost.bot { background: var(--bot); color: var(--bot-text); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .piece { transition: scale 160ms cubic-bezier(.22, 1, .36, 1), box-shadow 160ms ease; }
+  .sq.selectable:hover .piece { scale: 1.05; }
+  .sq.selected:hover .piece { scale: 1.09; }
+  .piece.glide { transition: translate 270ms cubic-bezier(.22, 1, .36, 1), scale 160ms ease, box-shadow 160ms ease; z-index: 5; }
+  .piece.clash-win { animation: clashWin 420ms cubic-bezier(.22, 1, .36, 1); }
+  .clash-ring { animation: clashRing 460ms ease-out forwards; }
+  .defeated-ghost { animation: pieceFadeOut 360ms ease-out forwards; }
+  .sq.target.quiet-target::before { animation: targetPop 180ms ease-out; }
+}
+@keyframes clashWin {
+  0% { scale: 1; box-shadow: 0 0 0 0 rgba(227, 178, 60, 0.78); }
+  40% { scale: 1.14; box-shadow: 0 0 0 6px rgba(227, 178, 60, 0.45); }
+  100% { scale: 1; box-shadow: inset 0 1.5px 0 rgba(255, 240, 205, 0.26), inset 0 -2px 0 rgba(18, 7, 3, 0.42), 0 2px 4px rgba(22, 10, 4, 0.34); }
+}
+@keyframes clashRing {
+  0% { opacity: 0.95; scale: 0.55; }
+  100% { opacity: 0; scale: 1.45; }
+}
+@keyframes pieceFadeOut {
+  0% { opacity: 0.9; scale: 1; rotate: 0deg; }
+  100% { opacity: 0; scale: 0.45; rotate: 14deg; }
+}
+@keyframes targetPop {
+  0% { opacity: 0; scale: 0.5; }
+  100% { opacity: 1; scale: 1; }
+}
+
+@media (forced-colors: active) {
+  .board { border: 3px solid CanvasText; }
+  .sq { border: 1px solid CanvasText; }
+  .sq.lake { border: 2px dashed Highlight; }
+  .piece { border: 2px solid ButtonText; forced-color-adjust: auto; }
+  .sq.selected .piece { outline: 3px solid Highlight; }
+}
 
 .panel { display: flex; flex-direction: column; gap: 14px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow); }
@@ -129,7 +277,7 @@ button.btn, label.btn {
   font: inherit; font-size: 14px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
   padding: 7px 12px; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
 }
-button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fbf2dc; }
 button.btn:disabled { opacity: .5; cursor: not-allowed; }
 label.btn input { display: none; }
 select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
@@ -142,7 +290,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
 .q-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border); }
 .q-list li:last-child { border-bottom: 0; }
 .q-list li.chosen { font-weight: 700; }
-.log { max-height: 220px; overflow: auto; font-size: 13px; margin: 0; padding: 0 0 0 18px; }
+.log { max-height: 220px; overflow: auto; scrollbar-gutter: stable; overscroll-behavior: contain; font-size: 13px; margin: 0; padding: 0 0 0 18px; }
 .log li { margin: 2px 0; }
 .captured { display: flex; flex-wrap: wrap; gap: 4px; min-height: 26px; }
 .chip { font-size: 12px; font-weight: 700; padding: 3px 6px; border-radius: 5px; }
@@ -152,10 +300,106 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
 </style>
 </head>
 <body>
+<!-- Hand-carved Philippine woodcut piece emblems (100% inline, zero external assets) -->
+<svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- 1: Flag — Araw ng Kalayaan banner -->
+    <symbol id="ph-rank-1" viewBox="0 0 32 32">
+      <path d="M7.5 28.5 L8.6 5.2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M9 6.5 L26.8 8.3 L23.2 13.8 L26.5 19.2 L8.6 18.4 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      <circle cx="15.8" cy="12.7" r="2.6" fill="currentColor"/>
+      <path d="M15.8 8.4v1.4M15.8 15.6v1.4M11.6 12.7h1.4M18.6 12.7h1.4M12.8 9.8l1 1M17.8 14.8l1 1M18.8 9.8l-1 1M13.8 14.8l-1 1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+    </symbol>
+    <!-- 2: Spy — Woven Salakot hat & shadowed eyes -->
+    <symbol id="ph-rank-2" viewBox="0 0 32 32">
+      <path d="M15.6 5.2 L16.3 8.1" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M3.2 18.2 L15.8 7.6 L28.8 17.6 Q16.2 21.8 3.2 18.2 Z" fill="currentColor"/>
+      <path d="M9.5 13.8 L14 16.4 M22 13.6 L17.6 16.4" stroke="rgba(20,8,4,0.45)" stroke-width="1.3" stroke-linecap="round"/>
+      <path d="M8.5 22.8 Q11.8 20.6 14.6 22.8 Q11.8 24.7 8.5 22.8 Z M17.5 22.8 Q20.4 20.6 23.6 22.8 Q20.4 24.7 17.5 22.8 Z" fill="currentColor"/>
+      <path d="M7.2 27.6 Q16 24.8 24.8 27.6" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+    </symbol>
+    <!-- 3: Scout — Haribon (Philippine Eagle) -->
+    <symbol id="ph-rank-3" viewBox="0 0 32 32">
+      <path d="M6.5 25.5 C7.5 18 9.5 12.5 13 10 L8 7.5 L12.8 8 L11 4.2 L15.6 7.5 L18 4.6 L18.4 8.8 C21.5 9.6 23.6 11.4 24.5 13.4 L28.6 15.2 L24.5 17.8 C23.8 19.6 22.2 18.6 20.8 17.6 L19.6 26.2 L15.4 23.5 L12.2 26.8 L10.2 23.2 Z" fill="currentColor"/>
+      <circle cx="19.6" cy="13.2" r="1.5" fill="rgba(22,10,4,0.85)"/>
+      <path d="M10.4 17.5 L15.6 15.8 M10 20.8 L15.8 19" stroke="rgba(22,10,4,0.5)" stroke-width="1.4" stroke-linecap="round"/>
+    </symbol>
+    <!-- 4: Miner — Hand-forged Itak (Bolo) & Sapper Pick -->
+    <symbol id="ph-rank-4" viewBox="0 0 32 32">
+      <path d="M6.5 25.2 L11.5 20.4 L23.8 6.8 C26.6 9.8 24.2 15.2 18.6 19.2 L13.4 22.6 Z" fill="currentColor"/>
+      <path d="M5.4 26.6 L9.6 22.4" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      <path d="M9.4 9.6 L25.2 25.6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M5.2 14.4 Q10.2 6.8 18.4 6.6" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+    </symbol>
+    <!-- 5: Sergeant — Three hand-brushed chevrons -->
+    <symbol id="ph-rank-5" viewBox="0 0 32 32">
+      <path d="M6.5 13.2 L16.2 6.6 L25.6 12.8" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6.2 19.6 L16 12.9 L25.9 19.2" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6.6 26 L16.1 19.4 L25.5 25.6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <!-- 6: Lieutenant — Carved Barong 8-point Tala star -->
+    <symbol id="ph-rank-6" viewBox="0 0 32 32">
+      <path d="M16 4.2 L18.8 12.6 L27.6 15.8 L18.6 19 L16.2 27.8 L13.2 19.1 L4.4 16.2 L13.4 12.8 Z" fill="currentColor"/>
+      <path d="M8.6 8.6 L13.6 13.6 M23.4 8.8 L18.4 13.6 M8.8 23.4 L13.6 18.6 M23.2 23.2 L18.4 18.6" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/>
+      <circle cx="16" cy="16" r="2.2" fill="rgba(22,10,4,0.62)"/>
+    </symbol>
+    <!-- 7: Captain — Crossed wavy Kalis / Kris blades -->
+    <symbol id="ph-rank-7" viewBox="0 0 32 32">
+      <path d="M7.5 24.5 C9.5 21 12.2 20.5 13.6 18 C15 15.6 17.5 15.2 19 12.5 C20.4 10 23.2 9.4 25.5 6.2" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      <path d="M24.5 24.5 C22.5 21 19.8 20.5 18.4 18 C17 15.6 14.5 15.2 13 12.5 C11.6 10 8.8 9.4 6.5 6.2" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      <path d="M5.5 22 L10.5 26.8 M26.5 22 L21.5 26.8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    </symbol>
+    <!-- 8: Major — Carved Sampaguita / Okir rosette -->
+    <symbol id="ph-rank-8" viewBox="0 0 32 32">
+      <path d="M16 5.2 C19 8.2 19 12.4 16 14.8 C13 12.4 13 8.2 16 5.2 Z" fill="currentColor"/>
+      <path d="M26.2 12.8 C24.2 16.4 20.2 17.6 17.2 15.6 C18.8 12.2 22.4 10.8 26.2 12.8 Z" fill="currentColor"/>
+      <path d="M22.4 25.2 C18.2 24.8 16.2 21.4 16.8 17.6 C20.6 18 23.2 21 22.4 25.2 Z" fill="currentColor"/>
+      <path d="M9.6 25.2 C8.8 21 11.4 18 15.2 17.6 C15.8 21.4 13.8 24.8 9.6 25.2 Z" fill="currentColor"/>
+      <path d="M5.8 12.8 C9.6 10.8 13.2 12.2 14.8 15.6 C11.8 17.6 7.8 16.4 5.8 12.8 Z" fill="currentColor"/>
+      <circle cx="16" cy="16.2" r="2.7" fill="rgba(22,10,4,0.72)"/>
+    </symbol>
+    <!-- 9: Colonel — Kalasag tribal shield & Kampilan blade -->
+    <symbol id="ph-rank-9" viewBox="0 0 32 32">
+      <path d="M16.2 3.8 L18.5 7.2 L16.8 9.5 L15.5 9.5 L14.2 6.8 Z" fill="currentColor"/>
+      <path d="M10 8.5 Q16 6.8 22 8.5 L20.2 16 L22.2 23.4 Q16 27.6 9.8 23.4 L11.8 16 Z" fill="currentColor"/>
+      <path d="M16 9.4 V24.2 M11.8 16 H20.2" stroke="rgba(22,10,4,0.65)" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M14.2 26.5 L16 28.8 L17.8 26.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <!-- 10: General — Twin Katipunan Stars (Heneral) -->
+    <symbol id="ph-rank-10" viewBox="0 0 32 32">
+      <path d="M9.6 7.8 L11.3 12.4 L16 12.6 L12.3 15.5 L13.6 20 L9.6 17.3 L5.6 20 L6.9 15.5 L3.2 12.6 L7.9 12.4 Z" fill="currentColor"/>
+      <path d="M22.4 7.8 L24.1 12.4 L28.8 12.6 L25.1 15.5 L26.4 20 L22.4 17.3 L18.4 20 L19.7 15.5 L16 12.6 L20.7 12.4 Z" fill="currentColor"/>
+      <path d="M6.4 24.4 Q16 28.2 25.6 24.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+    </symbol>
+    <!-- 11: Marshal — Supremo Sun-Crown & Three Stars -->
+    <symbol id="ph-rank-11" viewBox="0 0 32 32">
+      <circle cx="16" cy="7.4" r="2" fill="currentColor"/>
+      <circle cx="8.2" cy="10.2" r="1.7" fill="currentColor"/>
+      <circle cx="23.8" cy="10.2" r="1.7" fill="currentColor"/>
+      <path d="M5.8 24.8 L7.4 14.4 L12.4 18.6 L16 12.4 L19.6 18.6 L24.6 14.4 L26.2 24.8 Z" fill="currentColor"/>
+      <path d="M6.6 27.6 H25.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <circle cx="16" cy="21" r="2" fill="rgba(22,10,4,0.68)"/>
+    </symbol>
+    <!-- 12: Bomb — Spiked Lantaka / Mayon Mine -->
+    <symbol id="ph-rank-12" viewBox="0 0 32 32">
+      <circle cx="14.6" cy="18.2" r="7.4" fill="currentColor"/>
+      <path d="M14.6 8.4V11M14.6 25.4V28M4.8 18.2H7.4M21.8 18.2H24.4M8.2 11.8L10 13.6M19.4 22.8L21.2 24.6M8.2 24.6L10 22.8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M19.4 12.8 Q22.2 8.2 26 8.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M26.5 5 L27 7.6 M29.4 8.2 L27.2 8.8 M28.2 11.4 L26.4 9.8 M24.2 5.8 L25.6 7.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <!-- Hidden piece back — Kalinga / Banig carved diamond woodblock -->
+    <symbol id="ph-hidden" viewBox="0 0 32 32">
+      <path d="M16 4.5 L27.5 16 L16 27.5 L4.5 16 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      <path d="M16 9.6 L22.4 16 L16 22.4 L9.6 16 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M16 13.4 L18.6 16 L16 18.6 L13.4 16 Z" fill="currentColor"/>
+      <path d="M5.5 5.5 L9.5 6.2 L6.2 9.5 Z M26.5 5.5 L25.8 9.5 L22.5 6.2 Z M5.5 26.5 L6.2 22.5 L9.5 25.8 Z M26.5 26.5 L22.5 25.8 L25.8 22.5 Z" fill="currentColor"/>
+    </symbol>
+  </defs>
+</svg>
 <div class="wrap">
   <header>
     <h1>MARQ Stratego</h1>
-    <span class="sub">You are red (bottom). The bot plays blue with the network you load, under fog of war.</span>
+    <span class="sub">You are Katipunan red (bottom) on a woven banig board. The bot plays indigo blue under fog of war.</span>
   </header>
 
   <div class="layout">
@@ -164,8 +408,12 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
         <span class="msg" id="msg">Arrange your pieces, then start.</span>
         <span class="counters" id="counters"></span>
       </div>
-      <div class="board" id="board" role="grid" aria-label="Stratego board"></div>
-      <p class="legend">F flag · B bomb · M marshal · 9 general … 2 scout · 1 spy. Dashed outline: the bot knows that piece. During setup, click two of your pieces to swap them.</p>
+      <div class="event-strip" id="eventStrip"><span>Setup phase — click any two of your pieces to swap.</span></div>
+      <div class="board-shell">
+        <div class="board" id="board" role="grid" aria-label="Stratego board"></div>
+        <svg class="move-arrow-svg" id="moveArrowSvg" viewBox="0 0 1000 1000" aria-hidden="true"></svg>
+      </div>
+      <p class="legend">F Araw Flag · B Lantaka Bomb · M Supremo Marshal · 9 Heneral … 3 Itak Miner · 2 Haribon Scout · 1 Salakot Spy. Dashed outline: the bot knows that piece. During setup, click two of your pieces to swap them.</p>
     </section>
 
     <aside class="panel">
@@ -193,6 +441,7 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
           </select>
         </div>
         <div class="row" style="margin-top:10px">
+          <label class="toggle"><input type="checkbox" id="safeFilter" checked> Safety filter (no sure-loss blunders)</label>
           <label class="toggle"><input type="checkbox" id="peek"> Show the bot's pieces</label>
         </div>
       </div>
@@ -634,8 +883,29 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     return best;
   }
 
+  // Play-time safety filter (mirrors vec/safety.py): forbid non-Scout attacks on revealed pieces
+  // that beat the attacker, and non-Miner attacks on revealed Bombs, unless no other legal move
+  // exists. Reads only public/own view (`game.vis[player]`), never hidden opponent ranks.
+  function isUnsafeAttack(att, def) {
+    return (att !== P.SCOUT && battle(att, def) === -1) || (att !== P.MINER && def === P.BOMB);
+  }
+
+  function filterSafeMoves(game, player, moves) {
+    moves = moves || game.legalMoves(player);
+    var view = game.vis[player];
+    var safe = moves.filter(function (m) {
+      var from = m[0][0] * N + m[0][1], to = m[1][0] * N + m[1][1];
+      var v = view[to];
+      if (v === EMPTY || v === LAKE || v === HIDDEN || v * player >= 0) return true;
+      var att = Math.abs(view[from]), def = Math.abs(v);
+      return !isUnsafeAttack(att, def);
+    });
+    return safe.length ? safe : moves;
+  }
+
   root.StrategoEngine = { Game: Game, P: P, NAMES: NAMES, LABELS: LABELS, LAKE: LAKE, HIDDEN: HIDDEN, EMPTY: EMPTY,
-                          NUM_ACTIONS: NUM_ACTIONS, OBS_PLANES: OBS_PLANES, EXT_PLANES: EXT_PLANES, battle: battle, heuristicSetup: heuristicSetup,
+                          NUM_ACTIONS: NUM_ACTIONS, OBS_PLANES: OBS_PLANES, EXT_PLANES: EXT_PLANES, battle: battle,
+                          isUnsafeAttack: isUnsafeAttack, filterSafeMoves: filterSafeMoves, heuristicSetup: heuristicSetup,
                           structuredSetup: structuredSetup,
                           heuristicMove: heuristicMove, encodeMove: encodeMove, decodeAction: decodeAction, pieceSet: pieceSet };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -784,10 +1054,64 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
   var E = window.StrategoEngine, R = window.StrategoReplayExport, N = 10, ME = 1, BOT = -1;
   var game = null, phase = 'setup', mySetup = null, botSetup = null, selected = null, swapFirst = null;
   var session = null, inputPlanes = E.OBS_PLANES, modelName = null, botBusy = false;
-  var replayRec = null, pendingBotMeta = null;
+  var replayRec = null, pendingBotMeta = null, pendingAnim = null;
   var captured = { 1: [], '-1': [] };
   var $ = function (id) { return document.getElementById(id); };
   var boardEl = $('board');
+  var motionOk = function () { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: no-preference)').matches; };
+
+  function setEventStrip(html, cls) {
+    var el = $('eventStrip');
+    if (!el) return;
+    el.className = 'event-strip' + (cls ? ' ' + cls : '');
+    el.innerHTML = html;
+  }
+
+  function drawMoveArrow(move) {
+    var svg = $('moveArrowSvg');
+    if (!svg) return;
+    svg.innerHTML = '';
+    if (!move) return;
+    var r1 = move[0][0], c1 = move[0][1], r2 = move[1][0], c2 = move[1][1];
+    var x1 = c1 * 100 + 50, y1 = r1 * 100 + 50;
+    var x2 = c2 * 100 + 50, y2 = r2 * 100 + 50;
+    var dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+    if (len < 1) return;
+    var trimStart = 18, trimEnd = 42;
+    var ux = dx / len, uy = dy / len;
+    var sx = x1 + ux * trimStart, sy = y1 + uy * trimStart;
+    var ex = x2 - ux * trimEnd, ey = y2 - uy * trimEnd;
+    if (Math.hypot(ex - sx, ey - sy) < 8) { sx = x1; sy = y1; ex = x2 - ux * 36; ey = y2 - uy * 36; }
+    var ns = 'http://www.w3.org/2000/svg';
+    var defs = document.createElementNS(ns, 'defs');
+    var mk = document.createElementNS(ns, 'marker');
+    mk.setAttribute('id', 'playArrHead'); mk.setAttribute('markerWidth', '7'); mk.setAttribute('markerHeight', '7');
+    mk.setAttribute('refX', '5'); mk.setAttribute('refY', '3.5'); mk.setAttribute('orient', 'auto');
+    var poly = document.createElementNS(ns, 'polygon');
+    poly.setAttribute('points', '0 0, 7 3.5, 0 7'); poly.setAttribute('fill', 'rgba(227,178,60,0.95)');
+    mk.appendChild(poly); defs.appendChild(mk); svg.appendChild(defs);
+    var line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', sx.toFixed(1)); line.setAttribute('y1', sy.toFixed(1));
+    line.setAttribute('x2', ex.toFixed(1)); line.setAttribute('y2', ey.toFixed(1));
+    line.setAttribute('stroke', 'rgba(227,178,60,0.92)');
+    line.setAttribute('stroke-width', '10');
+    line.setAttribute('stroke-linecap', 'round');
+    if (len > 150) line.setAttribute('stroke-dasharray', '14 10');
+    line.setAttribute('marker-end', 'url(#playArrHead)');
+    svg.appendChild(line);
+  }
+
+  function glideElement(el, fromSq, toSq) {
+    if (!el || !motionOk() || fromSq === toSq) return;
+    var a = squares[fromSq].getBoundingClientRect(), b = squares[toSq].getBoundingClientRect();
+    var dx = a.left - b.left, dy = a.top - b.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    el.style.translate = dx.toFixed(1) + 'px ' + dy.toFixed(1) + 'px';
+    el.getBoundingClientRect();
+    el.classList.add('glide');
+    el.style.translate = '0px 0px';
+    setTimeout(function () { el.classList.remove('glide'); }, 300);
+  }
 
   if (window.ort) {
     ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
@@ -815,12 +1139,13 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     botSetup = Math.random() < 0.3 ? E.heuristicSetup(BOT) : E.structuredSetup(BOT);
     game = new E.Game().reset(mySetup, botSetup, 1);
     phase = 'setup'; selected = null; swapFirst = null;
-    replayRec = null; pendingBotMeta = null;
+    replayRec = null; pendingBotMeta = null; pendingAnim = null;
     captured = { 1: [], '-1': [] };
     $('log').innerHTML = '';
     $('qList').innerHTML = '<li><span>No move yet</span><span></span></li>';
     $('startBtn').disabled = false; $('shuffleBtn').disabled = false; $('downloadBtn').disabled = true;
     setMsg('Arrange your pieces (click two to swap), then start.');
+    setEventStrip('<span>Setup phase — click any two of your pieces to swap.</span>');
     render();
   }
 
@@ -834,10 +1159,11 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     var bName = session ? (modelName || 'onnx') : 'heuristic';
     var temp = !session ? null : ($('styleSel').value === 'best' ? 0.0 : 0.5);
     replayRec = R.createRecorder(game, { model: bName, red: 'human', blue: bName, netSide: BOT, temperature: temp });
-    pendingBotMeta = null;
+    pendingBotMeta = null; pendingAnim = null;
     phase = 'play'; selected = null;
     $('startBtn').disabled = true; $('shuffleBtn').disabled = true; $('downloadBtn').disabled = false;
     log((starter === ME ? 'You move' : 'The bot moves') + ' first.');
+    setEventStrip('<span><span class="ev-tag">START</span>' + (starter === ME ? 'Your turn to open.' : 'Bot moves first…') + '</span>');
     render();
     afterMove();
   }
@@ -848,9 +1174,11 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       if (game.actual[i] <= 0) return;
       if (swapFirst === null) { swapFirst = i; }
       else {
+        var fromSwap = swapFirst;
         var t = game.actual[swapFirst]; game.actual[swapFirst] = game.actual[i]; game.actual[i] = t;
         game.vis[1][swapFirst] = game.actual[swapFirst]; game.vis[1][i] = game.actual[i];
         swapFirst = null;
+        if (fromSwap !== i) pendingAnim = { type: 'swap', a: fromSwap, b: i };
       }
       render();
       return;
@@ -874,12 +1202,28 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       R.recordPly(replayRec, pre, info, bmeta);
     }
     selected = null;
+    var srcSq = move[0][0] * N + move[0][1], dstSq = move[1][0] * N + move[1][1];
     var text = (who === ME ? 'You: ' : 'Bot: ') + sqName(move[0]) + '→' + sqName(move[1]);
     if (info.battle) {
       var bt = info.battle, a = E.NAMES[bt.attacker], d = E.NAMES[bt.defender];
-      text += ' — ' + a + ' attacks ' + d + ': ' + (bt.result === 1 ? a + ' wins' : bt.result === -1 ? d + ' wins' : 'both removed');
+      var outcome = bt.result === 1 ? a + ' wins' : bt.result === -1 ? d + ' wins' : 'both removed';
+      text += ' — ' + a + ' attacks ' + d + ': ' + outcome;
       if (bt.result >= 0) captured[-who].push(bt.defender);
       if (bt.result <= 0) captured[who].push(bt.attacker);
+      var meWon = (who === ME && bt.result === 1) || (who === BOT && bt.result === -1);
+      var botWon = (who === BOT && bt.result === 1) || (who === ME && bt.result === -1);
+      var stripCls = meWon ? 'win' : (botWon ? 'lose' : 'clash');
+      var tagCls = meWon ? 'win' : (botWon ? 'lose' : 'clash');
+      setEventStrip(
+        '<span><span class="ev-tag ' + tagCls + '">CLASH</span><strong>' + (who === ME ? 'Your ' : 'Bot ') + a +
+        '</strong> attacks <strong>' + (who === ME ? 'Bot ' : 'your ') + d + '</strong> at <strong>' + sqName(move[1]) +
+        '</strong> — ' + outcome + '</span>',
+        stripCls
+      );
+      pendingAnim = { type: 'battle', src: srcSq, dst: dstSq, who: who, battle: bt };
+    } else {
+      setEventStrip('<span><span class="ev-tag">MOVE</span>' + text + '</span>');
+      pendingAnim = { type: 'move', src: srcSq, dst: dstSq, who: who };
     }
     log(text);
     render();
@@ -920,7 +1264,8 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
       var q = out[session.outputNames[0]].data;
       var valOut = (out.value && out.value.data && out.value.data.length)
         ? Math.round(Number(out.value.data[0]) * 10000) / 10000 : null;
-      var scored = moves.map(function (m) { return { move: m, q: q[E.encodeMove(m, BOT)] }; });
+      var candMoves = ($('safeFilter') && $('safeFilter').checked) ? E.filterSafeMoves(game, BOT, moves) : moves;
+      var scored = candMoves.map(function (m) { return { move: m, q: q[E.encodeMove(m, BOT)] }; });
       scored.sort(function (a, b) { return b.q - a.q; });
       var pick = scored[0];
       if (session.outputNames[0] === 'policy') {
@@ -997,6 +1342,13 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     });
   }
 
+  function pieceInner(rank, hidden) {
+    if (hidden) {
+      return '<svg class="emblem" aria-hidden="true" focusable="false"><use href="#ph-hidden"></use></svg>';
+    }
+    return '<span class="rk">' + E.LABELS[rank] + '</span><svg class="emblem" aria-hidden="true" focusable="false"><use href="#ph-rank-' + rank + '"></use></svg>';
+  }
+
   function render() {
     var peek = $('peek').checked, targets = {}, movable = {};
     if (phase === 'play' && !game.over && game.current === ME) {
@@ -1008,12 +1360,14 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
     }
     var last = {};
     if (game.lastMove) { last[game.lastMove[0][0] * N + game.lastMove[0][1]] = true; last[game.lastMove[1][0] * N + game.lastMove[1][1]] = true; }
+    var anim = pendingAnim;
+    pendingAnim = null;
     for (var i = 0; i < 100; i++) {
       var el = squares[i], v = game.actual[i], seen = game.vis[ME][i];
       var cls = 'sq' + (((Math.floor(i / N) + i % N) % 2) ? ' alt' : '');
       if (v === E.LAKE) cls += ' lake';
       if (last[i]) cls += ' last';
-      if (targets[i]) cls += ' target';
+      if (targets[i]) cls += (v !== E.EMPTY && v !== E.LAKE) ? ' target atk-target' : ' target quiet-target';
       if (selected === i || swapFirst === i) cls += ' selected';
       if (movable[i] || (phase === 'setup' && v > 0)) cls += ' selectable';
       el.className = cls;
@@ -1023,20 +1377,55 @@ select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 7px; b
         var d = document.createElement('div'), rank = Math.abs(v);
         if (v > 0) {
           d.className = 'piece me' + (game.vis[BOT][i] === v && phase === 'play' ? ' known-to-bot' : '');
-          d.innerHTML = E.LABELS[rank] + '<small>' + E.NAMES[rank].slice(0, 4) + '</small>';
+          d.innerHTML = pieceInner(rank, false);
+          d.title = 'Your ' + E.NAMES[rank] + ' (' + E.LABELS[rank] + ')';
           label = 'your ' + E.NAMES[rank];
         } else if (seen !== E.HIDDEN || peek) {
           d.className = 'piece bot' + (seen === E.HIDDEN ? ' peek' : '');
-          d.innerHTML = E.LABELS[rank] + '<small>' + E.NAMES[rank].slice(0, 4) + '</small>';
+          d.innerHTML = pieceInner(rank, false);
+          d.title = 'Bot ' + E.NAMES[rank] + ' (' + E.LABELS[rank] + ')';
           label = 'bot ' + E.NAMES[rank] + (seen === E.HIDDEN ? ' (hidden)' : '');
         } else {
           d.className = 'piece bot hidden';
-          d.textContent = '?';
+          d.innerHTML = pieceInner(0, true);
+          d.title = 'Hidden bot piece';
           label = 'hidden bot piece';
         }
         el.appendChild(d);
       } else if (v === E.LAKE) label = 'lake';
       el.setAttribute('aria-label', sqName([Math.floor(i / N), i % N]) + ': ' + label);
+    }
+    drawMoveArrow(phase === 'play' ? game.lastMove : null);
+    if (anim && motionOk()) {
+      if (anim.type === 'swap') {
+        glideElement(squares[anim.a].querySelector('.piece'), anim.b, anim.a);
+        glideElement(squares[anim.b].querySelector('.piece'), anim.a, anim.b);
+      } else if (anim.type === 'move') {
+        glideElement(squares[anim.dst].querySelector('.piece'), anim.src, anim.dst);
+      } else if (anim.type === 'battle') {
+        var dstEl = squares[anim.dst];
+        var survivor = dstEl.querySelector('.piece');
+        if (anim.battle.result === 1 && survivor) {
+          glideElement(survivor, anim.src, anim.dst);
+          survivor.classList.add('clash-win');
+        } else if (anim.battle.result === -1 && survivor) {
+          survivor.classList.add('clash-win');
+        }
+        // Defeated piece ghost fade-out
+        var lostRank = anim.battle.result === 1 ? anim.battle.defender : anim.battle.attacker;
+        var lostSide = anim.battle.result === 1 ? -anim.who : anim.who;
+        var ghost = document.createElement('div');
+        ghost.className = 'defeated-ghost ' + (lostSide === ME ? 'me' : 'bot');
+        ghost.innerHTML = pieceInner(lostRank, false);
+        dstEl.appendChild(ghost);
+        var ring = document.createElement('div');
+        ring.className = 'clash-ring';
+        dstEl.appendChild(ring);
+        setTimeout(function () {
+          if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+          if (ring.parentNode) ring.parentNode.removeChild(ring);
+        }, 500);
+      }
     }
     var mine = 0, theirs = 0;
     for (var j = 0; j < 100; j++) { if (game.actual[j] > 0 && game.actual[j] !== E.LAKE) mine++; else if (game.actual[j] < 0 && game.actual[j] !== E.LAKE) theirs++; }
